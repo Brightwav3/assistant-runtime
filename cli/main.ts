@@ -3,6 +3,7 @@ import { ActivationCoreAdapter, RealtimeCoreAdapter } from "../src/adapters.js";
 import { ActivationRuntime, DoubleClapProvider, WindowsClapListener } from "activation-core";
 import { GeminiLiveProvider, RealtimeCore } from "realtime-core";
 const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+process.on("unhandledRejection", (error) => { json({ type: "runtime.error", message: error instanceof Error ? error.message : String(error) }); });
 const command = process.argv[2];
 const clap = new DoubleClapProvider();
 const activationCore = new ActivationRuntime({ providers: [clap] });

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$GeminiApiKey)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -7,6 +7,8 @@ $state = Join-Path $root '.runtime'
 New-Item -ItemType Directory -Force -Path $state | Out-Null
 
 $assistantId = if ($env:ASSISTANT_ID) { $env:ASSISTANT_ID } else { 'assistant.primary' }
+if ($GeminiApiKey) { $env:GEMINI_API_KEY = $GeminiApiKey }
+if (-not $env:GEMINI_API_KEY) { throw 'GEMINI_API_KEY is required. Set it in this PowerShell session or pass -GeminiApiKey.' }
 @{
   startedAt = (Get-Date).ToUniversalTime().ToString('o')
   assistantId = $assistantId

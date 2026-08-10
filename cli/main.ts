@@ -6,7 +6,7 @@ const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\
 const command = process.argv[2];
 const clap = new DoubleClapProvider();
 const activationCore = new ActivationRuntime({ providers: [clap] });
-const activation = new ActivationCoreAdapter(activationCore);
+const activation = new ActivationCoreAdapter(activationCore, (event) => json({ type: "activation.detected", ...event }));
 const listener = new WindowsClapListener(clap, { sourceId: "windows-default-microphone", ...(process.env.CLAP_DEBUG === "1" ? { onPeak: (peak: number) => json({ type: "activation.audio.peak", peak }) } : {}) });
 const realtime = new RealtimeCoreAdapter(new RealtimeCore(new FakeRealtimeSpeechProvider()), { provider: "fake", inputFormat: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } });
 const microphone = { id: "windows-clap-listener", async start() { await listener.start(); }, async stop() { await listener.stop(); }, async health() { return { state: listener.isRunning() ? "healthy" as const : "unhealthy" as const }; } };

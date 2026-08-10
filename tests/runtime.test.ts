@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AssistantRuntime } from "../src/runtime.js";
+import { ActivationCoreAdapter, RealtimeCoreAdapter } from "../src/adapters.js";
+import { ActivationRuntime, FakeActivationProvider } from "activation-core";
+import { FakeRealtimeSpeechProvider, RealtimeCore } from "realtime-core";
 import type { Activation, ActivationSource, ComponentHealth, RuntimeComponent } from "../src/contracts.js";
 
 class Component implements RuntimeComponent { readonly events: string[] = []; constructor(readonly id: string, private readonly status: ComponentHealth = { state: "healthy" }) {} async start() { this.events.push("start"); } async stop() { this.events.push("stop"); } async health() { return this.status; } }
@@ -19,4 +22,10 @@ test("activation starts one modular interaction and stale completion cannot revi
 test("inactivity timeout cancels native interaction", async () => {
   const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: 10 }, { components: [], nativeRealtime: { async open() { return { async close() {}, done: new Promise<void>(() => {}) }; } } });
   await runtime.start(); await runtime.activate(); await new Promise((resolve) => setTimeout(resolve, 30)); assert.equal(runtime.status().interaction, null); await runtime.stop();
+});
+test("uses published Activation and Realtime Core packages end to end", async () => {
+  const provider = new FakeActivationProvider("external"); const activation = new ActivationCoreAdapter(new ActivationRuntime({ providers: [provider] }));
+  const realtime = new RealtimeCoreAdapter(new RealtimeCore(new FakeRealtimeSpeechProvider()), { provider: "fake", inputFormat: { sampleRate: 16000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } });
+  const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: 1000 }, { components: [activation], activation, nativeRealtime: realtime });
+  await runtime.start(); provider.detect({ method: "external" }); await new Promise((resolve) => setImmediate(resolve)); assert.equal(runtime.status().interaction?.state, "active"); await runtime.cancel(); assert.equal(runtime.status().interaction, null); await runtime.stop();
 });

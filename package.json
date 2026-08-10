@@ -13,4 +13,13 @@
     "verify": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": { "@types/node": "^22.13.10", "tsx": "^4.19.3", "typescript": "^5.8.2" }
+  ,"dependencies": {
+    "activation-core": "file:C:/Users/Sajmon/Jarvis/activation-core",
+    "realtime-core": "file:C:/Users/Sajmon/Jarvis/Jarvis-speech-system/realtime core",
+    "scribe-core": "file:C:/Users/Sajmon/Jarvis/Jarvis-speech-system/scribe core",
+    "voice-core": "file:C:/Users/Sajmon/Jarvis/Jarvis-speech-system/voice core",
+    "intelligence-core": "file:C:/Users/Sajmon/Jarvis/jarvis-intelligence-core",
+    "memory-core": "file:C:/Users/Sajmon/Jarvis/memory-core",
+    "state-core": "file:C:/Users/Sajmon/Jarvis/state-core"
+  }
 }

@@ -2,6 +2,7 @@ import { ActivationRuntime, type ActivationEvent } from "activation-core";
 import { RealtimeCore, type RealtimeSessionConfig, type RealtimeSpeechSession } from "realtime-core";
 import { IntelligenceRuntime } from "intelligence-core";
 import { VoiceRuntime } from "voice-core";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RuntimeComponent } from "./contracts.js";
 
 /** Adapts Activation Core's async event stream without importing its internals. */
@@ -21,8 +22,13 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig) {}
   async open(): Promise<{ close(): Promise<void>; done: Promise<void> }> {
     const session: RealtimeSpeechSession = await this.core.connect(this.config);
-    const done = (async () => { for await (const event of session.events()) if (event.type === "session.closed" || event.type === "session.error") return; })();
-    return { close: () => session.close(), done };
+    let player: ChildProcessWithoutNullStreams | undefined;
+    const done = (async () => { for await (const event of session.events()) {
+      if (event.type === "output.audio_chunk") { player ??= spawn("ffplay.exe", ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0"], { stdio: "pipe", windowsHide: true }); player.stdin.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength)); }
+      if (event.type === "session.closed" || event.type === "session.error") { player?.stdin.end(); return; }
+    } })();
+    await session.sendText("Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.");
+    return { close: async () => { player?.stdin.end(); await session.close(); }, done };
   }
 }
 

@@ -1,5 +1,7 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
 import { RealtimeCore, type RealtimeSessionConfig, type RealtimeSpeechSession } from "realtime-core";
+import { IntelligenceRuntime } from "intelligence-core";
+import { VoiceRuntime } from "voice-core";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RuntimeComponent } from "./contracts.js";
 
 /** Adapts Activation Core's async event stream without importing its internals. */
@@ -21,6 +23,16 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     const session: RealtimeSpeechSession = await this.core.connect(this.config);
     const done = (async () => { for await (const event of session.events()) if (event.type === "session.closed" || event.type === "session.error") return; })();
     return { close: () => session.close(), done };
+  }
+}
+
+/** Public Intelligence and Voice contracts form the output half of modular mode. */
+export class IntelligenceVoiceAdapter {
+  constructor(private readonly intelligence: IntelligenceRuntime, private readonly voice: VoiceRuntime) {}
+  async respond(input: { interactionId: string; text: string }): Promise<void> {
+    const result = await this.intelligence.execute({ request_id: input.interactionId, session_id: input.interactionId, input: { type: "text", text: input.text } });
+    const text = result.outputs.find((output): output is { type: "text"; text: string } => output.type === "text")?.text;
+    if (text) await this.voice.speak({ requestId: input.interactionId, text });
   }
 }
 

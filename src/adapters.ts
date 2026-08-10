@@ -17,17 +17,62 @@ export class ActivationCoreAdapter implements ActivationSource {
   private emit(event: ActivationEvent): void { const activation = { activationId: event.activationId, timestamp: event.timestamp, source: event.sourceId }; this.onDetected?.(activation); for (const handler of this.handlers) handler(activation); }
 }
 
+/** Single source of truth for playback invocation: preflight, tests, and streaming all use these exact arguments. */
+export const PCM_PLAYER = {
+  executable: "ffplay.exe",
+  /** ffplay 8 removed the -ar/-ac shorthands; the raw PCM demuxer options are -sample_rate/-ch_layout. */
+  args: (sampleRate: number): string[] => ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-sample_rate", String(sampleRate), "-ch_layout", "mono", "-i", "pipe:0"],
+};
+
+/** Preflight: proves the installed player accepts the production arguments before a user ever activates. */
+export async function verifyPlayback(sampleRate = 24_000): Promise<{ ok: boolean; message?: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(sampleRate), { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    child.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+    child.stdin.on("error", () => undefined);
+    child.once("error", (error) => resolve({ ok: false, message: `${PCM_PLAYER.executable} could not be started: ${error.message}` }));
+    child.once("close", (code) => resolve(code === 0 ? { ok: true } : { ok: false, message: `${PCM_PLAYER.executable} rejected the playback arguments (exit ${code}): ${stderr.trim() || "no diagnostics"}` }));
+    child.stdin.end(Buffer.alloc(Math.round(sampleRate * 0.05) * 2)); // 50 ms of silence
+  });
+}
+
 /** Adapts Realtime Core sessions to the runtime's provider-neutral native driver. */
 export class RealtimeCoreAdapter implements NativeRealtimeDriver {
-  constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig) {}
+  constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig, private readonly trace: (event: Record<string, unknown>) => void = () => {}) {}
   async open(): Promise<{ close(): Promise<void>; done: Promise<void> }> {
-    const session: RealtimeSpeechSession = await this.core.connect(this.config);
+    const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+    this.trace({ type: "realtime.connect.started", provider: this.config.provider });
+    let session: RealtimeSpeechSession;
+    try { session = await this.core.connect(this.config); }
+    catch (error) { this.trace({ type: "realtime.connect.failed", message: message(error) }); throw error; }
+    this.trace({ type: "realtime.connect.succeeded", sessionId: session.id });
+
     let player: ChildProcessWithoutNullStreams | undefined;
+    let chunks = 0;
+    const startPlayer = (): ChildProcessWithoutNullStreams => {
+      const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(24_000), { stdio: "pipe", windowsHide: true });
+      this.trace({ type: "playback.spawned", pid: child.pid ?? null });
+      child.on("error", (error) => this.trace({ type: "playback.error", message: message(error) }));
+      child.stdin.on("error", (error) => this.trace({ type: "playback.stdin.error", message: message(error) }));
+      child.stderr.on("data", (data: Buffer) => this.trace({ type: "playback.stderr", message: data.toString().trim() }));
+      // Silent playback death is the failure this instrumentation exists to prevent: never let a non-zero exit pass unreported.
+      child.on("close", (code) => { this.trace({ type: "playback.closed", code }); if (code !== 0) this.trace({ type: "runtime.error", message: `Playback process exited with code ${code} while the assistant was speaking; audio was lost.` }); });
+      return child;
+    };
+
     const done = (async () => { for await (const event of session.events()) {
-      if (event.type === "output.audio_chunk") { player ??= spawn("ffplay.exe", ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0"], { stdio: "pipe", windowsHide: true }); player.stdin.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength)); }
-      if (event.type === "session.closed" || event.type === "session.error") { player?.stdin.end(); return; }
-    } })();
-    await session.sendText("Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.");
+      if (event.type === "output.audio_chunk") {
+        player ??= startPlayer(); chunks++;
+        if (chunks === 1 || chunks % 25 === 0) this.trace({ type: "playback.chunk", chunks, bytes: event.frame.data.byteLength });
+        player.stdin.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength));
+      } else this.trace({ type: `realtime.${event.type}`, ...("error" in event ? { message: (event as { error: { message: string } }).error.message } : {}), ...("text" in event ? { text: (event as { text: string }).text } : {}) });
+      if (event.type === "session.closed" || event.type === "session.error") { this.trace({ type: "realtime.stream.ended", chunks }); player?.stdin.end(); return; }
+    } this.trace({ type: "realtime.stream.ended", chunks }); })();
+
+    const greeting = "Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.";
+    try { await session.sendText(greeting); this.trace({ type: "realtime.greeting.sent" }); }
+    catch (error) { this.trace({ type: "realtime.greeting.failed", message: message(error) }); throw error; }
     return { close: async () => { player?.stdin.end(); await session.close(); }, done };
   }
 }

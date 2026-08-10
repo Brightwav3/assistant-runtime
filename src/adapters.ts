@@ -39,6 +39,7 @@ export async function verifyPlayback(sampleRate = 24_000): Promise<{ ok: boolean
 
 /** Adapts Realtime Core sessions to the runtime's provider-neutral native driver. */
 export class RealtimeCoreAdapter implements NativeRealtimeDriver {
+  private active?: RealtimeSpeechSession;
   constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig, private readonly trace: (event: Record<string, unknown>) => void = () => {}) {}
   async open(): Promise<{ close(): Promise<void>; done: Promise<void> }> {
     const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -46,7 +47,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     let session: RealtimeSpeechSession;
     try { session = await this.core.connect(this.config); }
     catch (error) { this.trace({ type: "realtime.connect.failed", message: message(error) }); throw error; }
-    this.trace({ type: "realtime.connect.succeeded", sessionId: session.id });
+    this.active = session; this.trace({ type: "realtime.connect.succeeded", sessionId: session.id });
 
     let player: ChildProcessWithoutNullStreams | undefined;
     let chunks = 0;
@@ -73,8 +74,9 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     const greeting = "Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.";
     try { await session.sendText(greeting); this.trace({ type: "realtime.greeting.sent" }); }
     catch (error) { this.trace({ type: "realtime.greeting.failed", message: message(error) }); throw error; }
-    return { close: async () => { player?.stdin.end(); await session.close(); }, done };
+    return { close: async () => { player?.stdin.end(); if (this.active === session) this.active = undefined; await session.close(); }, done };
   }
+  async sendMicrophonePcm(data: Int16Array): Promise<void> { if (this.active) await this.active.sendAudio({ streamId: "windows-default-microphone", timestampMs: Date.now(), format: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 100 }, data }); }
 }
 
 /** Public Intelligence and Voice contracts form the output half of modular mode. */

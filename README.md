@@ -12,6 +12,10 @@ node dist/cli/main.js capabilities
 node dist/cli/main.js start
 ```
 
+## One-click local launcher
+
+Run `start-jarvis.ps1` from Explorer or PowerShell. It creates only ignored `.runtime/` launcher state and starts the runtime; stop it with `Ctrl+C`. Run `remove-jarvis-wiring.ps1` to delete that temporary wiring. It deliberately preserves memories and every source repository.
+
 All diagnostic commands produce one JSON object. `start` runs until `SIGINT` or `SIGTERM`.
 
 ## Public API

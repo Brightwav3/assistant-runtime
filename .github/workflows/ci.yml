@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Assistant Runtime composes sibling cores through relative file: dependencies,
+# so CI reproduces the local directory layout before installing.
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: assistant-runtime
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/activation-core
+          path: activation-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/Jarvis-speech-system
+          path: speech-system
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/intelligence-core
+          path: intelligence-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/memory-core
+          path: memory-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/state-core
+          path: state-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Install dependencies
+        working-directory: assistant-runtime
+        run: npm install
+      - name: Verify
+        working-directory: assistant-runtime
+        run: npm run verify

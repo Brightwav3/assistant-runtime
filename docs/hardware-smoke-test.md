@@ -1,0 +1,112 @@
+# Hardware smoke test
+
+Proves the native path end to end on real hardware:
+
+```text
+double clap → microphone → Gemini Live → speaker → memory survives a restart
+```
+
+Automated tests cover everything except the physical devices. This is the part
+CI can never run, so it is recorded here by hand.
+
+## Prerequisites
+
+| Requirement | Check |
+| --- | --- |
+| Node 22+ | `node --version` |
+| ffmpeg and ffplay on PATH | `where ffplay` — install with `winget install Gyan.FFmpeg` |
+| A Gemini API key | set in the current shell only, never committed |
+| A working capture device | `./check-microphone.ps1 -List` |
+| Built cores | every core publishes from `dist/`, so build them first |
+
+## 1. Verify the microphone before anything else
+
+A device that opens but returns digital silence is the most common reason a live
+test appears to hang: activation never fires, and nothing reports an error.
+
+```powershell
+./check-microphone.ps1 -Device "<device name>"
+```
+
+- **PASS** — audio reached the activation threshold.
+- **WARN** — audio arrives but stayed below the threshold. Clap louder, raise the
+  Windows input level, or lower `activation.amplitudeThreshold` in `config.json`.
+- **FAIL** — digital silence. Check the hardware mute switch and the Windows input
+  level. Virtual devices (webcam, phone, streaming cables) return silence whenever
+  their source application is not running.
+
+The **first capture from a cold device is often silent** while it spins up. If the
+first run fails, run it a second time before believing it.
+
+## 2. Configure
+
+```powershell
+Copy-Item config.example.json config.json
+```
+
+Set `activation.device` to the exact device name from step 1. `config.json` is
+git-ignored and never leaves the machine.
+
+## 3. Provide the key
+
+```powershell
+$env:GEMINI_API_KEY = "<key>"
+```
+
+The key lives in the shell for this session only. `start-jarvis.ps1` also reads
+`.runtime\gemini-api-key.txt` if it exists; that path is git-ignored.
+
+## 4. Preflight without speaking
+
+```powershell
+node dist/cli/main.js capabilities
+node dist/cli/main.js health
+```
+
+`capabilities` must report `nativeRealtime: true` and a `realtime` component with
+`nativeAudio`, `interruption` and a `16000Hz/1ch` input format. Before start,
+every component reports `degraded: not started` — that is expected, not a fault.
+
+## 5. Run the assistant
+
+```powershell
+./start-jarvis.ps1
+```
+
+The launcher verifies the build, runs the playback preflight and then starts.
+`playback.preflight` must report `ok: true` before activation is possible.
+
+## 6. What to record
+
+Run through each step and write down what actually happened.
+
+| # | Step | Expected | Result |
+| --- | --- | --- | --- |
+| 1 | Clap twice | `activation.detected` in the event stream | |
+| 2 | — | `realtime.session.started` | |
+| 3 | Say a sentence | `realtime.transcript.final` with `source: "input"` | |
+| 4 | — | Assistant answers through the speaker | |
+| 5 | Interrupt mid-answer | `realtime.output.interrupted`, audio stops immediately | |
+| 6 | Say "remember that I ..." | conversation summary written to memory | |
+| 7 | Wait out `inactivityMs` | interaction ends by itself | |
+| 8 | Ctrl+C, restart, ask about the fact | the assistant still knows it | |
+| 9 | `node dist/cli/main.js memory list` | the summary is present | |
+
+## Known limitations to confirm or refute
+
+These are recorded in the architecture baseline as unverified. The point of this
+test is to turn each one into a fact.
+
+1. Real microphones can occasionally lose speech detection.
+2. `realtime.session.closed` currently requires a new activation rather than
+   reopening on its own.
+3. Summaries do not infer preferences or facts; they only summarise turns.
+4. The modular Scribe → Intelligence → Voice path has never run on hardware.
+
+## Resetting between runs
+
+```powershell
+./reset-memory.ps1
+```
+
+Deletes the durable memory database so a run starts from nothing.

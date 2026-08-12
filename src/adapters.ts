@@ -97,7 +97,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
         chunks++;
         if (chunks === 1 || chunks % 25 === 0) this.trace({ type: "playback.chunk", chunks, bytes: event.frame.data.byteLength });
         playback.handle(event);
-      } else this.trace({ type: `realtime.${event.type}`, ...("error" in event ? { message: (event as { error: { message: string } }).error.message } : {}), ...("text" in event ? { text: (event as { text: string }).text } : {}), ...("source" in event ? { source: (event as { source: string }).source } : {}) });
+      } else this.trace({ type: `realtime.${event.type}`, ...("error" in event ? { message: (event as { error: { message: string } }).error.message } : {}), ...("text" in event ? { text: (event as { text: string }).text } : {}), ...("source" in event ? { source: (event as { source: string }).source } : {}), ...("code" in event ? { code: (event as { code: number }).code } : {}), ...("reason" in event ? { reason: (event as { reason: string }).reason } : {}) });
       if (event.type !== "output.audio_chunk") playback.handle(event);
       if (event.type === "transcript.final" || event.type === "output.audio_started") this.onActivity?.();
       if (event.type === "session.closed" || event.type === "session.error") { if (this.active === session) this.active = undefined; this.onActivity = undefined; this.trace({ type: "realtime.stream.ended", chunks }); playback.close(); return; }

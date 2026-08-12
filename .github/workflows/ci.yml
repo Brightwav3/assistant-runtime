@@ -44,6 +44,17 @@ jobs:
           node-version: 22
       - name: Install ffmpeg
         run: choco install ffmpeg -y --no-progress
+      # Every core publishes its public entry from dist/, so a fresh checkout
+      # must be built before Assistant Runtime can resolve it.
+      - name: Build every core
+        shell: bash
+        run: |
+          set -e
+          for dir in core-runtime activation-core intelligence-core memory-core state-core "speech-system/realtime core" "speech-system/scribe core" "speech-system/voice core"; do
+            echo "::group::$dir"
+            (cd "$dir" && npm install --no-audit --no-fund && npm run build)
+            echo "::endgroup::"
+          done
       - name: Install dependencies
         working-directory: assistant-runtime
         run: npm install

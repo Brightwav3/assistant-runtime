@@ -100,11 +100,11 @@ Run through each step and write down what actually happened.
 | 2 | — | `realtime.session.started` | **PASS** |
 | 3 | Say a sentence | `realtime.transcript.final` with `source: "input"` | **PASS** |
 | 4 | — | Assistant answers through the speaker | **PASS**, audible |
-| 5 | Interrupt mid-answer | `realtime.output.interrupted`, audio stops immediately | not exercised |
+| 5 | Interrupt mid-answer | `realtime.output.interrupted`, audio stops immediately | **PASS**, audio stopped on interruption |
 | 6 | Say "remember that I ..." | conversation summary written to memory | **PASS** |
-| 7 | Wait out `inactivityMs` | interaction ends by itself | not exercised |
+| 7 | Wait out `inactivityMs` | interaction ends by itself | **PASS** |
 | 8 | Ctrl+C, restart, ask about the fact | the assistant still knows it | **PASS**, memory survived a restart |
-| 9 | `node dist/cli/main.js memory list` | the summary is present | not exercised |
+| 9 | `node dist/cli/main.js memory list` | the summary is present | **PASS** |
 
 ## Known limitations to confirm or refute
 
@@ -121,6 +121,7 @@ test is to turn each one into a fact.
    reason are now recorded so a recurrence can be diagnosed instead of guessed.
 3. Summaries do not infer preferences or facts; they only summarise turns.
 4. The modular Scribe → Intelligence → Voice path has never run on hardware.
+   **Still open.** Every result above came from the native realtime path.
 
 ## Resetting between runs
 

@@ -96,24 +96,29 @@ Run through each step and write down what actually happened.
 
 | # | Step | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Clap twice | `activation.detected` in the event stream | |
-| 2 | — | `realtime.session.started` | |
-| 3 | Say a sentence | `realtime.transcript.final` with `source: "input"` | |
-| 4 | — | Assistant answers through the speaker | |
-| 5 | Interrupt mid-answer | `realtime.output.interrupted`, audio stops immediately | |
-| 6 | Say "remember that I ..." | conversation summary written to memory | |
-| 7 | Wait out `inactivityMs` | interaction ends by itself | |
-| 8 | Ctrl+C, restart, ask about the fact | the assistant still knows it | |
-| 9 | `node dist/cli/main.js memory list` | the summary is present | |
+| 1 | Clap twice | `activation.detected` in the event stream | **PASS** 2026-08-12, fired reliably on repeated attempts |
+| 2 | — | `realtime.session.started` | **PASS** |
+| 3 | Say a sentence | `realtime.transcript.final` with `source: "input"` | **PASS** |
+| 4 | — | Assistant answers through the speaker | **PASS**, audible |
+| 5 | Interrupt mid-answer | `realtime.output.interrupted`, audio stops immediately | not exercised |
+| 6 | Say "remember that I ..." | conversation summary written to memory | **PASS** |
+| 7 | Wait out `inactivityMs` | interaction ends by itself | not exercised |
+| 8 | Ctrl+C, restart, ask about the fact | the assistant still knows it | **PASS**, memory survived a restart |
+| 9 | `node dist/cli/main.js memory list` | the summary is present | not exercised |
 
 ## Known limitations to confirm or refute
 
 These are recorded in the architecture baseline as unverified. The point of this
 test is to turn each one into a fact.
 
-1. Real microphones can occasionally lose speech detection.
+1. Real microphones can occasionally lose speech detection. **Not observed.**
+   Activation fired on every attempt during the first hardware run.
 2. `realtime.session.closed` currently requires a new activation rather than
-   reopening on its own.
+   reopening on its own. **Still open, and worse than described:** on the first
+   hardware run the provider closed the session immediately after the greeting,
+   twice in a row, with `chunks: 0` and no `session.error`. A later run on the
+   same configuration worked. The cause is unexplained; the close code and
+   reason are now recorded so a recurrence can be diagnosed instead of guessed.
 3. Summaries do not infer preferences or facts; they only summarise turns.
 4. The modular Scribe → Intelligence → Voice path has never run on hardware.
 

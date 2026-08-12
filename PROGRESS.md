@@ -2,9 +2,11 @@
 
 ## Current state
 
-**IN PROGRESS — production composition and durable local integration are implemented; credentialed hardware and modular live-path verification remain.** The repository contains a headless lifecycle/runtime, configuration-driven composition root, JSON CLI, public-core adapters, native realtime wiring, SQLite memory, State Core publication, offline tests, documentation, and repository hygiene configuration.
+**IN PROGRESS — the native path is verified on real hardware; modular live-path verification remains.** The repository contains a headless lifecycle/runtime, configuration-driven composition root, JSON CLI, public-core adapters, native realtime wiring, SQLite memory, State Core publication, offline tests, documentation, and repository hygiene configuration.
 
 Verified on 2026-08-11: `npm run verify` passed (TypeScript typecheck, 15 offline integration tests, and build). JSON `health`, `capabilities`, `status`, and memory commands returned valid structured output.
+
+Verified on real hardware on 2026-08-12, every step of [the hardware smoke test](./docs/hardware-smoke-test.md): double-clap activation, a Gemini Live session, an audible spoken answer, barge-in stopping playback immediately, a conversation summary written to memory, the inactivity timeout ending the interaction on its own, memory recalled after a restart, and the memory CLI listing it. Component lifecycle, failure isolation, and health aggregation are now owned by Core Runtime's registry rather than a second local implementation.
 
 ## Integration audit
 

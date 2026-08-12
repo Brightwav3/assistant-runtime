@@ -29,6 +29,7 @@
     "intelligence-core": "file:../intelligence-core",
     "memory-core": "file:../memory-core",
     "state-core": "file:../state-core",
-    "core-runtime": "file:../core-runtime"
+    "core-runtime": "file:../core-runtime",
+    "tool-system": "file:../tool-system"
   }
 }

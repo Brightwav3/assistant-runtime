@@ -5,12 +5,12 @@ export type HealthState = "healthy" | "degraded" | "unhealthy";
 export interface ComponentHealth { state: HealthState; detail?: string }
 export interface RuntimeComponent {
   id: string; required?: boolean; start(): Promise<void>; stop(): Promise<void>; health(): Promise<ComponentHealth>;
-  capabilities?(): Promise<Record<string, boolean | string[]>>;
+  capabilities?(): Promise<Record<string, unknown>>;
 }
 export interface Activation { activationId: string; timestamp: string; source?: string }
 export interface ActivationSource extends RuntimeComponent { subscribe(handler: (activation: Activation) => void): () => void }
-export interface NativeRealtimeDriver { open(input: { interactionId: string; signal: AbortSignal }): Promise<{ close(): Promise<void>; done: Promise<void> }> }
-export interface ModularDriver { run(input: { interactionId: string; signal: AbortSignal }): Promise<void> }
+export interface NativeRealtimeDriver { open(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<{ close(): Promise<void>; done: Promise<void> }> }
+export interface ModularDriver { run(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<void> }
 export interface StatePublisher { set(input: { key: string; value: string | boolean; source: { sourceType: "system"; sourceId: string } }): Promise<unknown> }
 export interface RuntimeConfig { assistantId: string; mode: InteractionMode; inactivityMs: number; state?: StatePublisher }
 export interface InteractionStatus { interactionId: string; activationId?: string; mode: InteractionMode; state: InteractionState; startedAt: string }

@@ -25,6 +25,16 @@ test("inactivity timeout cancels native interaction", async () => {
   const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: 10 }, { components: [], nativeRealtime: { async open() { return { async close() {}, done: new Promise<void>(() => {}) }; } } });
   await runtime.start(); await runtime.activate(); await new Promise((resolve) => setTimeout(resolve, 30)); assert.equal(runtime.status().interaction, null); await runtime.stop();
 });
+
+test("native activity resets the inactivity timeout", async () => {
+  let activity!: () => void;
+  const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: 20 }, { components: [], nativeRealtime: { async open(input) { activity = (input as unknown as { onActivity?: () => void }).onActivity!; return { async close() {}, done: new Promise<void>(() => {}) }; } } });
+  await runtime.start(); await runtime.activate();
+  await new Promise((resolve) => setTimeout(resolve, 10)); activity();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.ok(runtime.status().interaction);
+  await runtime.cancel(); await runtime.stop();
+});
 test("uses published Activation and Realtime Core packages end to end", async () => {
   const provider = new FakeActivationProvider("external"); const activation = new ActivationCoreAdapter(new ActivationRuntime({ providers: [provider] }));
   const realtime = new RealtimeCoreAdapter(new RealtimeCore(new FakeRealtimeSpeechProvider()), { provider: "fake", inputFormat: { sampleRate: 16000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } });

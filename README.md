@@ -14,18 +14,30 @@ node dist/cli/main.js start
 
 ## One-click local launcher
 
-Run `start-jarvis.ps1` from Explorer or PowerShell. It creates only ignored `.runtime/` launcher state and starts the runtime; stop it with `Ctrl+C`. Run `remove-jarvis-wiring.ps1` to delete that temporary wiring. It deliberately preserves memories and every source repository.
+Copy `config.example.json` to ignored `config.json` for local overrides, set `GEMINI_API_KEY`, then run `start-jarvis.ps1`. Stop it with `Ctrl+C`. Automatic conversation summaries are stored in `C:\Users\Sajmon\Jarvis\.runtime\memory.sqlite`; use `reset-memory.ps1` for the explicit destructive memory reset.
 
 All diagnostic commands produce one JSON object. `start` runs until `SIGINT` or `SIGTERM`.
 
 ## Public API
 
-`AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and optional State Core publication. It is configured with explicit adapters for activation, native realtime, and the modular speech path.
+`AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and State Core publication. `createAssistantRuntime()` composes configured activation, microphone, native realtime, SQLite memory, and State Core components.
 
 ## Boundaries
 
-This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, persistent memory, state storage, provider protocols, or device networking. It only composes their public contracts.
+This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It composes their public contracts and automatically stores compact input/output conversation summaries through Memory Core; raw audio and full audio archives are not stored. The CLI can still add durable facts, preferences, and instructions explicitly.
+
+## Diagnostics
+
+```powershell
+node dist/cli/main.js health --json
+node dist/cli/main.js capabilities --json
+node dist/cli/main.js status --json
+node dist/cli/main.js memory list --json
+node dist/cli/main.js memory add --kind=preference --text="The user prefers concise answers." --json
+node dist/cli/main.js memory search --query=concise --json
+node dist/cli/main.js memory forget --id=<memory-id> --json
+```
 
 ## Current integration note
 
-The repository provides tested adapter contracts and fakes. The checked sibling packages have public TypeScript source boundaries, but several do not yet publish package `exports`/runtime entry points. No private-source import is used here. Real local/hardware smoke tests require those published package boundaries plus local audio/provider configuration; they are intentionally not represented as passing automated tests.
+The repository provides a production composition root and tested adapter contracts. No private-source import is used here. Real local/hardware smoke tests still require a Windows microphone, speaker, `ffplay.exe`, and `GEMINI_API_KEY`.

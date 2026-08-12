@@ -8,7 +8,11 @@ New-Item -ItemType Directory -Force -Path $state | Out-Null
 
 $assistantId = if ($env:ASSISTANT_ID) { $env:ASSISTANT_ID } else { 'assistant.primary' }
 if ($GeminiApiKey) { $env:GEMINI_API_KEY = $GeminiApiKey }
-if (-not $env:GEMINI_API_KEY) { throw 'GEMINI_API_KEY is required. Set it in this PowerShell session or pass -GeminiApiKey.' }
+if (-not $env:GEMINI_API_KEY) {
+  $keyFile = Join-Path $state 'gemini-api-key.txt'
+  if (Test-Path -LiteralPath $keyFile) { $env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath $keyFile).Trim() }
+}
+if (-not $env:GEMINI_API_KEY) { throw 'GEMINI_API_KEY is required. Add it to .runtime\gemini-api-key.txt or set it in this PowerShell session.' }
 @{
   startedAt = (Get-Date).ToUniversalTime().ToString('o')
   assistantId = $assistantId

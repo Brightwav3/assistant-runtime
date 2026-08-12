@@ -1,0 +1,26 @@
+{
+  "assistantId": "assistant.primary",
+  "mode": "native_realtime",
+  "inactivityMs": 30000,
+  "activation": {
+    "provider": "double_clap",
+    "sourceId": "windows-default-microphone",
+    "minimumIntervalMs": 150,
+    "maximumIntervalMs": 700,
+    "amplitudeThreshold": 0.18
+  },
+  "realtime": {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-live-preview",
+    "inputSampleRate": 16000,
+    "outputSampleRate": 24000
+  },
+  "memory": {
+    "enabled": true,
+    "path": "..\\.runtime\\memory.sqlite",
+    "scopeSubjectId": "primary-user"
+  },
+  "state": {
+    "enabled": true
+  }
+}

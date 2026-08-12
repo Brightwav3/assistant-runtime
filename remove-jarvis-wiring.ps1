@@ -3,7 +3,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $state = Join-Path $PSScriptRoot '.runtime'
-if (Test-Path -LiteralPath $state) {
-  Remove-Item -LiteralPath $state -Recurse -Force
-  Write-Host 'Temporary runtime wiring removed. Source repositories and memories were preserved.'
-} else { Write-Host 'No temporary runtime wiring exists.' }
+$launcher = Join-Path $state 'launcher.json'
+if (Test-Path -LiteralPath $launcher) {
+  Remove-Item -LiteralPath $launcher -Force
+  Write-Host 'Temporary launcher wiring removed. The Jarvis-root SQLite memory database was preserved.'
+} else { Write-Host 'No temporary launcher wiring exists. The Jarvis-root SQLite memory database was preserved.' }

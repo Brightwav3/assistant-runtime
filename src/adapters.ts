@@ -1,8 +1,8 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
-import { RealtimeCore, type RealtimeSessionConfig, type RealtimeSpeechSession } from "realtime-core";
+import { RealtimeCore, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
 import { IntelligenceRuntime } from "intelligence-core";
 import { VoiceRuntime } from "voice-core";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RuntimeComponent } from "./contracts.js";
 
 /** Adapts Activation Core's async event stream without importing its internals. */
@@ -12,6 +12,7 @@ export class ActivationCoreAdapter implements ActivationSource {
   async start(): Promise<void> { await this.core.start(); this.task = this.consume(); }
   async stop(): Promise<void> { await this.core.stop(); await this.task; }
   async health(): Promise<ComponentHealth> { const health = await this.core.health(); return { state: health.state }; }
+  async capabilities(): Promise<Record<string, unknown>> { const capabilities = await this.core.capabilities(); return { activationMethods: capabilities.activationMethods, offline: capabilities.offline }; }
   subscribe(handler: (value: Activation) => void): () => void { this.handlers.add(handler); return () => this.handlers.delete(handler); }
   private async consume(): Promise<void> { for await (const event of this.core.events()) if (event.type === "activation.detected") this.emit(event); }
   private emit(event: ActivationEvent): void { const activation = { activationId: event.activationId, timestamp: event.timestamp, source: event.sourceId }; this.onDetected?.(activation); for (const handler of this.handlers) handler(activation); }
@@ -23,6 +24,33 @@ export const PCM_PLAYER = {
   /** ffplay 8 removed the -ar/-ac shorthands; the raw PCM demuxer options are -sample_rate/-ch_layout. */
   args: (sampleRate: number): string[] => ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-sample_rate", String(sampleRate), "-ch_layout", "mono", "-i", "pipe:0"],
 };
+
+export interface PcmPlaybackSink { write(chunk: Buffer): void; end(): void; abort(): void; }
+
+export class PcmPlaybackController {
+  private sink?: PcmPlaybackSink;
+  private outputId?: string;
+  constructor(private readonly factory: () => PcmPlaybackSink) {}
+  handle(event: RealtimeSpeechEvent): void {
+    if (event.type === "output.audio_started") { this.sink?.abort(); this.sink = this.factory(); this.outputId = event.outputId; return; }
+    if (event.type === "output.audio_chunk") { if (this.sink && this.outputId === event.outputId) this.sink.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength)); return; }
+    if (event.type === "output.interrupted") { if (!event.outputId || event.outputId === this.outputId) { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; } return; }
+    if (event.type === "output.audio_completed" && event.outputId === this.outputId) { this.sink?.end(); this.sink = undefined; this.outputId = undefined; }
+  }
+  close(): void { this.sink?.end(); this.sink = undefined; this.outputId = undefined; }
+  abort(): void { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; }
+}
+
+function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unknown>) => void): PcmPlaybackSink {
+  const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(sampleRate), { stdio: "pipe", windowsHide: true });
+  let intentionallyAborted = false;
+  trace({ type: "playback.spawned", pid: child.pid ?? null });
+  child.on("error", (error) => trace({ type: "playback.error", message: error instanceof Error ? error.message : String(error) }));
+  child.stdin.on("error", (error) => { if (!intentionallyAborted) trace({ type: "playback.stdin.error", message: error instanceof Error ? error.message : String(error) }); });
+  child.stderr.on("data", (data: Buffer) => trace({ type: "playback.stderr", message: data.toString().trim() }));
+  child.on("close", (code) => { trace({ type: "playback.closed", code }); if (code !== 0 && !intentionallyAborted) trace({ type: "runtime.error", message: `Playback process exited with code ${code} while the assistant was speaking; audio was lost.` }); });
+  return { write: (chunk) => { if (child.stdin.writable) child.stdin.write(chunk); }, end: () => { if (child.stdin.writable) child.stdin.end(); }, abort: () => { intentionallyAborted = true; child.stdin.destroy(); child.kill(); } };
+}
 
 /** Preflight: proves the installed player accepts the production arguments before a user ever activates. */
 export async function verifyPlayback(sampleRate = 24_000): Promise<{ ok: boolean; message?: string }> {
@@ -40,43 +68,55 @@ export async function verifyPlayback(sampleRate = 24_000): Promise<{ ok: boolean
 /** Adapts Realtime Core sessions to the runtime's provider-neutral native driver. */
 export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private active?: RealtimeSpeechSession;
-  constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig, private readonly trace: (event: Record<string, unknown>) => void = () => {}) {}
-  async open(): Promise<{ close(): Promise<void>; done: Promise<void> }> {
+  private opening = false;
+  private pendingFrames: Int16Array[] = [];
+  private onActivity?: () => void;
+  constructor(private readonly core: RealtimeCore, private readonly config: RealtimeSessionConfig | (() => RealtimeSessionConfig | Promise<RealtimeSessionConfig>), private readonly trace: (event: Record<string, unknown>) => void = () => {}, private readonly onSpeechEvent: (event: RealtimeSpeechEvent) => void = () => {}) {}
+  async health(): Promise<ComponentHealth> { const health = await this.core.health(); return { state: health.status, detail: health.status === "healthy" ? undefined : `Realtime provider ${health.providerId} is ${health.status}.` }; }
+  async capabilities(): Promise<Record<string, unknown>> { const capabilities = await this.core.capabilities(); const provider = capabilities.providers[0]; return { nativeAudio: provider.nativeAudio, inputTranscription: provider.inputTranscription, outputTranscription: provider.outputTranscription, interruption: provider.interruption, inputFormats: provider.inputFormats.map((format) => `${format.sampleRate}Hz/${format.channels}ch`) }; }
+  async start(): Promise<void> {}
+  async stop(): Promise<void> { await this.active?.close(); this.active = undefined; this.onActivity = undefined; }
+  async open(input: { onActivity?: () => void } = {}): Promise<{ close(): Promise<void>; done: Promise<void> }> {
+    this.onActivity = input.onActivity;
+    const config = typeof this.config === "function" ? await this.config() : this.config;
     const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
-    this.trace({ type: "realtime.connect.started", provider: this.config.provider });
+    this.trace({ type: "realtime.connect.started", provider: config.provider });
+    this.opening = true;
     let session: RealtimeSpeechSession;
-    try { session = await this.core.connect(this.config); }
-    catch (error) { this.trace({ type: "realtime.connect.failed", message: message(error) }); throw error; }
+    try { session = await this.core.connect(config); }
+    catch (error) { this.pendingFrames = []; this.opening = false; this.onActivity = undefined; this.trace({ type: "realtime.connect.failed", message: message(error) }); throw error; }
     this.active = session; this.trace({ type: "realtime.connect.succeeded", sessionId: session.id });
+    this.opening = false;
+    for (const frame of this.pendingFrames.splice(0)) await session.sendAudio({ streamId: "windows-default-microphone", timestampMs: Date.now(), format: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 100 }, data: frame });
 
-    let player: ChildProcessWithoutNullStreams | undefined;
+    const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace));
     let chunks = 0;
-    const startPlayer = (): ChildProcessWithoutNullStreams => {
-      const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(24_000), { stdio: "pipe", windowsHide: true });
-      this.trace({ type: "playback.spawned", pid: child.pid ?? null });
-      child.on("error", (error) => this.trace({ type: "playback.error", message: message(error) }));
-      child.stdin.on("error", (error) => this.trace({ type: "playback.stdin.error", message: message(error) }));
-      child.stderr.on("data", (data: Buffer) => this.trace({ type: "playback.stderr", message: data.toString().trim() }));
-      // Silent playback death is the failure this instrumentation exists to prevent: never let a non-zero exit pass unreported.
-      child.on("close", (code) => { this.trace({ type: "playback.closed", code }); if (code !== 0) this.trace({ type: "runtime.error", message: `Playback process exited with code ${code} while the assistant was speaking; audio was lost.` }); });
-      return child;
-    };
-
     const done = (async () => { for await (const event of session.events()) {
+      this.onSpeechEvent(event);
       if (event.type === "output.audio_chunk") {
-        player ??= startPlayer(); chunks++;
+        chunks++;
         if (chunks === 1 || chunks % 25 === 0) this.trace({ type: "playback.chunk", chunks, bytes: event.frame.data.byteLength });
-        player.stdin.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength));
-      } else this.trace({ type: `realtime.${event.type}`, ...("error" in event ? { message: (event as { error: { message: string } }).error.message } : {}), ...("text" in event ? { text: (event as { text: string }).text } : {}) });
-      if (event.type === "session.closed" || event.type === "session.error") { this.trace({ type: "realtime.stream.ended", chunks }); player?.stdin.end(); return; }
+        playback.handle(event);
+      } else this.trace({ type: `realtime.${event.type}`, ...("error" in event ? { message: (event as { error: { message: string } }).error.message } : {}), ...("text" in event ? { text: (event as { text: string }).text } : {}), ...("source" in event ? { source: (event as { source: string }).source } : {}) });
+      if (event.type !== "output.audio_chunk") playback.handle(event);
+      if (event.type === "transcript.final" || event.type === "output.audio_started") this.onActivity?.();
+      if (event.type === "session.closed" || event.type === "session.error") { if (this.active === session) this.active = undefined; this.onActivity = undefined; this.trace({ type: "realtime.stream.ended", chunks }); playback.close(); return; }
     } this.trace({ type: "realtime.stream.ended", chunks }); })();
 
     const greeting = "Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.";
     try { await session.sendText(greeting); this.trace({ type: "realtime.greeting.sent" }); }
     catch (error) { this.trace({ type: "realtime.greeting.failed", message: message(error) }); throw error; }
-    return { close: async () => { player?.stdin.end(); if (this.active === session) this.active = undefined; await session.close(); }, done };
+    return { close: async () => { playback.close(); if (this.active === session) this.active = undefined; this.onActivity = undefined; await session.close(); }, done };
   }
-  async sendMicrophonePcm(data: Int16Array): Promise<void> { if (this.active) await this.active.sendAudio({ streamId: "windows-default-microphone", timestampMs: Date.now(), format: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 100 }, data }); }
+  async sendMicrophonePcm(data: Int16Array): Promise<void> {
+    const frame = data.slice();
+    const session = this.active;
+    if (session) {
+      if (data.some((sample) => Math.abs(sample) / 32768 >= 0.02)) this.onActivity?.();
+      try { await session.sendAudio({ streamId: "windows-default-microphone", timestampMs: Date.now(), format: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 100 }, data: frame }); }
+      catch (error) { if (this.active === session) this.active = undefined; this.trace({ type: "realtime.input.failed", message: error instanceof Error ? error.message : String(error) }); }
+    } else if (this.opening && this.pendingFrames.length < 25) this.pendingFrames.push(frame);
+  }
 }
 
 /** Public Intelligence and Voice contracts form the output half of modular mode. */
@@ -91,4 +131,17 @@ export class IntelligenceVoiceAdapter {
 
 export function asComponent(id: string, runtime: { start(): Promise<void>; stop(): Promise<void>; health(): Promise<{ state: "healthy" | "degraded" | "unhealthy" }> }): RuntimeComponent {
   return { id, start: () => runtime.start(), stop: () => runtime.stop(), health: async () => ({ state: (await runtime.health()).state }) };
+}
+
+export function asDiagnosticComponent(
+  id: string,
+  runtime: { start(): Promise<void>; stop(): Promise<void>; health(): Promise<{ state: "healthy" | "degraded" | "unhealthy"; detail?: string }>; capabilities?(): Promise<object> },
+): RuntimeComponent {
+  return {
+    id,
+    start: () => runtime.start(),
+    stop: () => runtime.stop(),
+    health: async () => runtime.health(),
+    capabilities: runtime.capabilities ? async () => Object.fromEntries(Object.entries(await runtime.capabilities!())) : undefined,
+  };
 }

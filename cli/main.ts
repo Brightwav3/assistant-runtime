@@ -1,20 +1,62 @@
-import { AssistantRuntime } from "../src/runtime.js";
-import { ActivationCoreAdapter, RealtimeCoreAdapter, verifyPlayback } from "../src/adapters.js";
-import { ActivationRuntime, DoubleClapProvider, WindowsClapListener } from "activation-core";
-import { GeminiLiveProvider, RealtimeCore } from "realtime-core";
+import { AssistantRuntimeError } from "../src/contracts.js";
+import { createAssistantRuntime } from "../src/composition.js";
+import { loadRuntimeSettings } from "../src/config.js";
+import { PCM_PLAYER, verifyPlayback } from "../src/adapters.js";
+import { memoryKinds, type CreateMemoryInput, type MemoryKind } from "memory-core";
+
 const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
-process.on("unhandledRejection", (error) => { json({ type: "runtime.error", message: error instanceof Error ? error.message : String(error) }); });
-const command = process.argv[2];
-const clap = new DoubleClapProvider();
-const activationCore = new ActivationRuntime({ providers: [clap] });
-const activation = new ActivationCoreAdapter(activationCore, (event) => json({ type: "activation.detected", ...event }));
-const realtime = new RealtimeCoreAdapter(new RealtimeCore(new GeminiLiveProvider()), { provider: "gemini", inputFormat: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } }, json);
-const listener = new WindowsClapListener(clap, { sourceId: "windows-default-microphone", onFrame: (frame) => { void realtime.sendMicrophonePcm(frame); }, ...(process.env.CLAP_DEBUG === "1" ? { onPeak: (peak: number) => json({ type: "activation.audio.peak", peak }) } : {}) });
-const microphone = { id: "windows-clap-listener", async start() { await listener.start(); }, async stop() { await listener.stop(); }, async health() { return { state: listener.isRunning() ? "healthy" as const : "unhealthy" as const }; } };
-const runtime = new AssistantRuntime({ assistantId: process.env.ASSISTANT_ID ?? "assistant.primary", mode: "native_realtime", inactivityMs: Number(process.env.INACTIVITY_MS ?? 30000) }, { components: [activation, microphone], activation, nativeRealtime: realtime });
-if (command === "health") json(await runtime.health());
-else if (command === "capabilities") json(runtime.capabilities());
-else if (command === "status") json(runtime.status());
-else if (command === "start") { const playback = await verifyPlayback(); json({ type: "playback.preflight", ...playback }); if (!playback.ok) { json({ type: "runtime.error", message: playback.message }); process.exitCode = 1; }
-  else { await runtime.start(); json(runtime.status()); const keepAlive = setInterval(() => {}, 1 << 30); await new Promise<void>((resolve) => { const stop = () => { clearInterval(keepAlive); void runtime.stop().finally(resolve); }; process.once("SIGINT", stop); process.once("SIGTERM", stop); }); } }
-else { json({ error: { code: "COMMAND_INVALID", message: "Use start, health, capabilities, or status." } }); process.exitCode = 2; }
+const args = process.argv.slice(3);
+const flag = (name: string): string | undefined => args.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
+async function memoryCommand(): Promise<void> {
+  const settings = await loadRuntimeSettings();
+  const composition = await createAssistantRuntime(settings);
+  if (!composition.memory) throw new Error("Memory is disabled in the runtime configuration.");
+  await composition.memory.start();
+  try {
+    const operation = process.argv[3] ?? "list";
+    if (operation === "list") json(await composition.memory.list());
+    else if (operation === "search") json(await composition.memory.search({ query: flag("--query"), limit: Number(flag("--limit") ?? 50) }));
+    else if (operation === "forget") { const id = flag("--id"); if (!id) throw new Error("memory forget requires --id=<memory-id>"); await composition.memory.forget(id); json({ ok: true, memoryId: id }); }
+    else if (operation === "add") {
+      const text = flag("--text"); const kind = (flag("--kind") ?? "fact") as MemoryKind;
+      if (!text) throw new Error("memory add requires --text=<durable-fact>");
+      if (!memoryKinds.includes(kind)) throw new Error(`memory add kind must be one of: ${memoryKinds.join(", ")}`);
+      const input: CreateMemoryInput = { kind, content: { type: "text", text }, scope: { type: "user", subjectId: settings.memory.scopeSubjectId }, provenance: { sourceType: "user", sourceId: "cli" }, confidence: 1, tags: ["explicit"] };
+      json(await composition.memory.create(input));
+    } else throw new Error("Use memory list, memory search, memory add, or memory forget.");
+  } finally { await composition.memory.stop(); }
+}
+
+async function main(): Promise<void> {
+  const command = process.argv[2];
+  if (command === "memory") return memoryCommand();
+  const settings = await loadRuntimeSettings();
+  const composition = await createAssistantRuntime(settings, (event) => json(event));
+  const runtime = composition.runtime;
+  if (command === "health") json(await runtime.health());
+  else if (command === "capabilities") json({ ...runtime.capabilities(), components: await runtime.componentCapabilities(), player: { executable: PCM_PLAYER.executable, sampleRate: settings.realtime.outputSampleRate } });
+  else if (command === "status") json(runtime.status());
+  else if (command === "start") {
+    const playback = await verifyPlayback(settings.realtime.outputSampleRate);
+    json({ type: "playback.preflight", ...playback });
+    if (!playback.ok) throw new Error(playback.message);
+    await runtime.start();
+    json(runtime.status());
+    await new Promise<void>((resolve) => {
+      let stopped = false;
+      const stop = () => { if (stopped) return; stopped = true; void runtime.stop().finally(resolve); };
+      process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    });
+  } else {
+    json({ error: { code: "COMMAND_INVALID", message: "Use start, health, capabilities, status, or memory." } });
+    process.exitCode = 2;
+  }
+}
+
+void main().catch((error) => {
+  const code = error instanceof AssistantRuntimeError ? error.code : "RUNTIME_ERROR";
+  json({ error: { code, message: message(error) } });
+  process.exitCode = 1;
+});

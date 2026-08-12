@@ -44,8 +44,22 @@ first run fails, run it a second time before believing it.
 Copy-Item config.example.json config.json
 ```
 
-Set `activation.device` to the exact device name from step 1. `config.json` is
-git-ignored and never leaves the machine.
+**Leave `activation.device` unset.** Windows exposes two different names for the
+same microphone, and only one of them works here:
+
+| Interface | Example name | Used by |
+| --- | --- | --- |
+| DirectShow | `Mikrofon (Logitech G432 Gaming Headset)` | ffmpeg, the check script |
+| WASAPI | `Mikrofon` | Activation Core, `config.json` |
+
+Putting the DirectShow name in `config.json` fails with
+`No microphone found matching "..."`. The WASAPI name is usually shared by
+several devices, so it cannot identify one either. Omitting `activation.device`
+selects the system default, which is the only unambiguous choice. Set it only
+when the default is the wrong device, and then use the name marked `*` by
+`./check-microphone.ps1 -List`.
+
+`config.json` is git-ignored and never leaves the machine.
 
 ## 3. Provide the key
 

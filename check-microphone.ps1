@@ -3,10 +3,16 @@
 Proves a microphone actually delivers audio before a live assistant test.
 
 .DESCRIPTION
-Lists DirectShow capture devices, records a short sample from one of them and
-reports the peak amplitude against the activation threshold in config.json.
-Digital silence is reported as a failure: a device that opens successfully but
-returns no signal is the most common reason a live test appears to hang.
+Lists capture devices, records a short sample from one of them and reports the
+peak amplitude against the activation threshold in config.json. Digital silence
+is reported as a failure: a device that opens successfully but returns no signal
+is the most common reason a live test appears to hang.
+
+Windows exposes two different names for the same microphone. ffmpeg reports the
+DirectShow name ("Mikrofon (Logitech G432 Gaming Headset)") and is used here for
+recording. Activation Core reaches the device through WASAPI, which reports a
+short name ("Mikrofon") and is what config.json accepts. Both lists are printed
+so the two are never confused.
 
 .EXAMPLE
 ./check-microphone.ps1 -List
@@ -32,11 +38,24 @@ function Get-CaptureDevices {
   $output | Select-String -Pattern '"(.+)" \(audio\)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
 }
 
+function Show-ActivationDevices {
+  $script = 'import { Microphone } from "decibri"; for (const d of Microphone.devices()) console.log((d.isDefault ? "  * " : "    ") + "[" + d.index + "] " + d.name);'
+  Push-Location (Join-Path (Split-Path $PSScriptRoot -Parent) 'activation-core')
+  try { & node --input-type=module -e $script } catch { Write-Host '    (could not query Activation Core devices)' } finally { Pop-Location }
+}
+
 if ($List -or -not $Device) {
   $devices = Get-CaptureDevices
   if (-not $devices) { throw 'No DirectShow audio capture devices were found.' }
-  Write-Host 'Capture devices:'
-  $devices | ForEach-Object { Write-Host "  $_" }
+  Write-Host 'Recording devices (DirectShow names, used by this script):'
+  $devices | ForEach-Object { Write-Host "    $_" }
+  Write-Host ''
+  Write-Host 'Activation devices (WASAPI names, what config.json accepts; * = system default):'
+  Show-ActivationDevices
+  Write-Host ''
+  Write-Host 'These names differ for the same hardware. Leave activation.device unset to'
+  Write-Host 'use the system default, which is the only unambiguous choice when several'
+  Write-Host 'devices share a short name.'
   if ($List) { return }
   Write-Host ''
   Write-Host 'Re-run with -Device "<name>" to test one.'

@@ -17,6 +17,10 @@ jobs:
           path: assistant-runtime
       - uses: actions/checkout@v4
         with:
+          repository: Brightwav3/Jarvis-brain-core
+          path: core-runtime
+      - uses: actions/checkout@v4
+        with:
           repository: Brightwav3/activation-core
           path: activation-core
       - uses: actions/checkout@v4

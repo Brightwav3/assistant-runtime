@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { ComponentRegistry, EventBus } from "core-runtime";
 import type { Activation, ActivationSource, AssistantCapabilities, AssistantHealth, ComponentHealth, InteractionMode, InteractionStatus, ModularDriver, NativeRealtimeDriver, RuntimeComponent, RuntimeConfig, RuntimeStatus } from "./contracts.js";
 import { AssistantRuntimeError } from "./contracts.js";
 
 export interface RuntimeDependencies { components: RuntimeComponent[]; activation?: ActivationSource; nativeRealtime?: NativeRealtimeDriver; modular?: ModularDriver }
 
+/** Core Runtime owns component lifecycle, health and failure isolation; this runtime owns interactions. */
+function hosted(component: RuntimeComponent) {
+  return { id: component.id, name: component.id, version: "0.1.0", required: component.required ?? true, start: () => component.start(), stop: () => component.stop(), health: () => component.health(), ...(component.capabilities ? { capabilities: () => component.capabilities!() } : {}) };
+}
+
 export class AssistantRuntime {
+  private readonly registry: ComponentRegistry;
   private lifecycle: RuntimeStatus["state"] = "created";
   private current: InteractionStatus | null = null;
   private unsubscribe?: () => void;
@@ -14,23 +21,19 @@ export class AssistantRuntime {
 
   constructor(private readonly config: RuntimeConfig, private readonly dependencies: RuntimeDependencies) {
     if (!config.assistantId || config.inactivityMs < 1) throw new AssistantRuntimeError("CONFIGURATION_INVALID", "assistantId and a positive inactivityMs are required.");
+    this.registry = new ComponentRegistry(new EventBus());
+    for (const component of dependencies.components) this.registry.register(hosted(component));
   }
   async start(): Promise<void> {
     if (this.lifecycle === "running") return;
-    const started: RuntimeComponent[] = [];
-    try {
-      for (const component of this.dependencies.components) { await component.start(); started.push(component); }
-      this.lifecycle = "running";
-      if (this.dependencies.activation) this.unsubscribe = this.dependencies.activation.subscribe((activation) => { void this.activate(activation); });
-    } catch (error) {
-      for (const component of started.reverse()) { try { await component.stop(); } catch { /* preserve the startup error */ } }
-      throw error;
-    }
+    await this.registry.startAll();
+    this.lifecycle = "running";
+    if (this.dependencies.activation) this.unsubscribe = this.dependencies.activation.subscribe((activation) => { void this.activate(activation); });
   }
   async stop(): Promise<void> {
     if (this.lifecycle !== "running") { this.lifecycle = "stopped"; return; }
     await this.cancel(); this.unsubscribe?.(); this.unsubscribe = undefined;
-    for (const component of [...this.dependencies.components].reverse()) await component.stop();
+    await this.registry.stopAll();
     this.lifecycle = "stopped";
   }
   async activate(activation?: Activation): Promise<InteractionStatus | null> {
@@ -59,15 +62,12 @@ export class AssistantRuntime {
   }
   status(): RuntimeStatus { return { state: this.lifecycle, interaction: this.current ? { ...this.current } : null }; }
   async health(): Promise<AssistantHealth> {
-    const entries = await Promise.all(this.dependencies.components.map(async (component) => [component.id, await component.health()] as const));
-    const components = Object.fromEntries(entries); const values = Object.values(components);
+    const entries = (await this.registry.list()).map((record) => [record.id, record.health] as const);
+    const components = Object.fromEntries(entries) as Record<string, ComponentHealth>; const values = Object.values(components);
     return { state: values.some((health) => health.state === "unhealthy") ? "unhealthy" : values.some((health) => health.state === "degraded") ? "degraded" : "healthy", components };
   }
   capabilities(): AssistantCapabilities { return { activation: Boolean(this.dependencies.activation), nativeRealtime: Boolean(this.dependencies.nativeRealtime), modular: Boolean(this.dependencies.modular), state: Boolean(this.config.state) }; }
-  async componentCapabilities(): Promise<Record<string, Record<string, unknown>>> {
-    const entries = await Promise.all(this.dependencies.components.filter((component) => component.capabilities).map(async (component) => [component.id, await component.capabilities!()] as const));
-    return Object.fromEntries(entries);
-  }
+  componentCapabilities(): Promise<Record<string, Record<string, unknown>>> { return this.registry.capabilities(); }
   private async runNative(interaction: InteractionStatus): Promise<void> {
     const driver = this.dependencies.nativeRealtime; if (!driver) throw new AssistantRuntimeError("MODE_UNAVAILABLE", "Native realtime driver is not configured.");
     const session = await driver.open({ interactionId: interaction.interactionId, signal: this.abort!.signal, onActivity: () => this.armInactivity(interaction.interactionId) });

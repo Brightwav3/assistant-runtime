@@ -9,12 +9,12 @@ test("interrupted output aborts the old sink and accepts the next output", async
   ];
   let created = 0;
   const controller = new PcmPlaybackController(() => sinks[created++]!);
-  const frame = (outputId: string, value: number) => ({ type: "output.audio_chunk", outputId, frame: { data: new Int16Array([value]) } });
-  controller.handle({ type: "output.audio_started", outputId: "old" });
+  const frame = (outputId: string, value: number) => ({ type: "output.audio_chunk", outputId, timestampMs: Date.now(), frame: { data: new Int16Array([value]) } });
+  controller.handle({ type: "output.audio_started", outputId: "old", timestampMs: Date.now() });
   controller.handle(frame("old", 1));
-  controller.handle({ type: "output.interrupted", outputId: "old" });
+  controller.handle({ type: "output.interrupted", outputId: "old", timestampMs: Date.now() });
   controller.handle(frame("old", 2));
-  controller.handle({ type: "output.audio_started", outputId: "new" });
+  controller.handle({ type: "output.audio_started", outputId: "new", timestampMs: Date.now() });
   controller.handle(frame("new", 3));
   assert.equal(sinks[0]!.aborted, 1);
   assert.equal(sinks[0]!.writes.length, 1);

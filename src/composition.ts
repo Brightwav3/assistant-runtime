@@ -2,17 +2,17 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ActivationRuntime, DoubleClapProvider, WindowsClapListener } from "activation-core";
 import { MemoryRuntime, SqliteMemoryStore } from "memory-core";
-import { GeminiLiveProvider, RealtimeCore } from "realtime-core";
+import { REALTIME_INPUT_FORMAT, GeminiLiveProvider, RealtimeCore } from "realtime-core";
 import { StateRuntime } from "state-core";
 import { AssistantRuntime } from "./runtime.js";
 import { ActivationCoreAdapter, RealtimeCoreAdapter, asDiagnosticComponent } from "./adapters.js";
 import { ConversationMemoryWriter } from "./conversation-memory.js";
 import { ModularSpeechDriver } from "./modular.js";
-import type { ComponentHealth, RuntimeComponent, StatePublisher } from "./contracts.js";
+import type { ComponentHealth, RealtimeToolExecutor, RuntimeComponent, StatePublisher } from "./contracts.js";
 import type { RuntimeSettings } from "./config.js";
 
 export interface AssistantComposition { runtime: AssistantRuntime; memory?: MemoryRuntime; state?: StateRuntime; components: RuntimeComponent[]; }
-export interface AssistantCompositionOptions { microphoneFactory?: () => Promise<{ on(event: "data", listener: (chunk: Buffer) => void): unknown; off?(event: "data", listener: (chunk: Buffer) => void): unknown; stop(): void }> }
+export interface AssistantCompositionOptions { microphoneFactory?: () => Promise<{ on(event: "data", listener: (chunk: Buffer) => void): unknown; off?(event: "data", listener: (chunk: Buffer) => void): unknown; stop(): void }>; realtimeToolExecutor?: RealtimeToolExecutor }
 
 function redact(value: unknown): string {
   const text = value instanceof Error ? value.message : String(value);
@@ -44,7 +44,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   const activationCore = new ActivationRuntime({ providers: [clap] });
   const activation = new ActivationCoreAdapter(activationCore, (event) => trace({ type: "activation.detected", ...event }));
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
-  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, inputFormat: { sampleRate: settings.realtime.inputSampleRate, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 }, systemInstruction: await memoryInstruction(memory) }), (event) => {
+  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: await memoryInstruction(memory) }), (event) => {
     trace(event);
     const type = String(event.type);
     const publisher = statePublisher(state, trace);
@@ -52,7 +52,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
-  }, (event) => void conversationMemory?.handle(event));
+  }, (event) => void conversationMemory?.handle(event), options.realtimeToolExecutor);
   const modular = settings.mode === "modular" ? new ModularSpeechDriver({ memory, memorySubjectId: settings.memory.scopeSubjectId, trace }) : undefined;
 
   const microphone = new WindowsClapListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { if (settings.mode === "native_realtime") void realtime.sendMicrophonePcm(frame); modular?.pushMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) });

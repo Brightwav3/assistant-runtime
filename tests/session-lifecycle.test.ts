@@ -6,13 +6,14 @@ import { RealtimeCoreAdapter } from "../src/adapters.js";
 class ProviderClosedSession implements RealtimeSpeechSession {
   readonly id = "provider-closed-session";
   private closed = false;
-  private queue: RealtimeSpeechEvent[] = [{ type: "session.started", sessionId: this.id, providerId: "fake" }];
+  private queue: RealtimeSpeechEvent[] = [{ type: "session.started", sessionId: this.id, providerId: "fake", timestampMs: Date.now() }];
   private waiters: Array<() => void> = [];
   async sendAudio(_frame: AudioFrame): Promise<void> { if (this.closed) throw new Error("session closed"); }
   async sendText(): Promise<void> {}
+  async sendToolResult(): Promise<void> {}
   async interrupt(): Promise<void> {}
   async close(): Promise<void> { this.providerClose(); }
-  providerClose(): void { if (this.closed) return; this.closed = true; this.queue.push({ type: "session.closed", sessionId: this.id }); for (const resolve of this.waiters.splice(0)) resolve(); }
+  providerClose(): void { if (this.closed) return; this.closed = true; this.queue.push({ type: "session.closed", sessionId: this.id, timestampMs: Date.now() }); for (const resolve of this.waiters.splice(0)) resolve(); }
   async *events(): AsyncIterable<RealtimeSpeechEvent> { while (!this.closed || this.queue.length) { if (!this.queue.length) await new Promise<void>((resolve) => this.waiters.push(resolve)); const event = this.queue.shift(); if (event) yield event; } }
 }
 

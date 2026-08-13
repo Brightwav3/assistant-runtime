@@ -9,6 +9,10 @@ double clap → microphone → Gemini Live → speaker → memory survives a res
 Automated tests cover everything except the physical devices. This is the part
 CI can never run, so it is recorded here by hand.
 
+The explicit native realtime tool probe is documented separately in
+[`docs/realtime-tools-smoke-test.md`](./realtime-tools-smoke-test.md). It is
+not enabled by this general hardware path and must be injected deliberately.
+
 ## Prerequisites
 
 | Requirement | Check |

@@ -19,6 +19,7 @@ Remaining: real native microphone/speaker/Gemini smoke verification, intermitten
 - One configuration-driven composition root and CLI.
 - Activation Core with Windows microphone/double-clap source.
 - Native realtime path: microphone PCM -> Gemini Live -> speaker PCM.
+- Optional native realtime tool loop: Gemini tool calls -> injected Tool System executor -> provider result.
 - Persistent SQLite Memory Core with automatic compact conversation summaries and explicit, privacy-safe durable facts.
 - State Core with live interaction/speech facts.
 - Optional modular path: Scribe -> Intelligence -> Voice.
@@ -27,7 +28,7 @@ Remaining: real native microphone/speaker/Gemini smoke verification, intermitten
 
 ## Non-goals
 
-- GUI, cloud memory sync, automatic recording of raw audio, full audio archive, tool platform, device protocol implementation, wake-word model, or committing credentials.
+- GUI, cloud memory sync, automatic recording of raw audio, full audio archive, tool platform implementation, device protocol implementation, wake-word model, or committing credentials. Tool execution is delegated to an explicitly injected Tool System runtime.
 
 ## Configuration and secrets
 
@@ -117,6 +118,10 @@ Complete only when all are verified:
 9. Offline test suite, typecheck and build pass.
 10. Local native realtime and memory smoke tests pass with real hardware/credentials.
 11. No credentials, raw audio, or unintended transcript archive are tracked.
+
+12. The optional native realtime tool loop is covered offline through the
+    existing Tool System boundary, and its explicit Calculator hardware probe
+    is documented separately from the default composition.
 
 ## Stop condition
 

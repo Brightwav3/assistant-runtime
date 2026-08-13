@@ -13,7 +13,7 @@ import {
   type BrokerLaunch,
 } from "tool-system";
 
-import { ToolSystemPolicyClient, ToolSystemToolClient } from "../src/tool-bridge.js";
+import { ToolSystemPolicyClient, ToolSystemRealtimeToolExecutor, ToolSystemToolClient } from "../src/tool-bridge.js";
 
 const CATALOG = { browser: "firefox", editor: "gedit" } as const;
 
@@ -231,4 +231,35 @@ test("bound parameters are not demanded of the model", async () => {
 
   const [declared] = bodies[0].tools[0].function_declarations;
   assert.equal("required" in declared.parameters, false, "a bound parameter is the runtime's job, not the model's");
+});
+
+test("realtime executor discovers standard JSON Schema and executes through Tool System", async () => {
+  const { runtime, launched } = toolSystem();
+  await runtime.start();
+  const executor = new ToolSystemRealtimeToolExecutor(runtime);
+  const [declaration] = await executor.discover();
+
+  assert.equal(declaration?.name, "open_app");
+  assert.equal(declaration?.inputSchema.type, "object");
+  assert.equal((declaration?.inputSchema.properties as any).app.type, "string");
+  assert.deepEqual((declaration?.inputSchema.properties as any).app.enum, ["browser", "editor"]);
+  assert.deepEqual(declaration?.inputSchema.required, ["app"]);
+
+  const result = await executor.execute({ callId: "call-realtime-1", tool: "open_app", arguments: { app: "browser" } });
+  assert.equal(result.isError, undefined);
+  assert.equal(result.content, "Opened browser.");
+  assert.deepEqual(launched, [{ executable: "firefox", args: [] }]);
+});
+
+test("realtime executor propagates cancellation without launching a host process", async () => {
+  const { runtime, launched } = toolSystem();
+  await runtime.start();
+  const executor = new ToolSystemRealtimeToolExecutor(runtime);
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await executor.execute({ callId: "call-realtime-cancelled", tool: "open_app", arguments: { app: "browser" }, signal: controller.signal });
+  assert.equal(result.isError, true);
+  assert.match(result.content, /cancel/i);
+  assert.deepEqual(launched, []);
 });

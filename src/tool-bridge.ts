@@ -11,6 +11,7 @@
  */
 
 import type { PolicyClient, PolicyDecision, ToolClient, ToolDescriptor, ToolRequest, ToolResult } from "intelligence-core";
+import type { RealtimeToolDeclaration } from "realtime-core";
 import type {
   ExecutionArguments,
   ParameterSchema,
@@ -18,6 +19,7 @@ import type {
   ToolDeclaration,
   ToolRuntime,
 } from "tool-system";
+import type { RealtimeToolExecutor } from "./contracts.js";
 
 /**
  * Renders a declaration as JSON Schema for the model.
@@ -44,6 +46,25 @@ function toInputSchema(declaration: ToolDeclaration): Record<string, unknown> {
   const required = declaration.required.filter((name) => !bound.has(name));
 
   return { type: "OBJECT", properties, ...(required.length > 0 ? { required } : {}) };
+}
+
+function toRealtimeInputSchema(declaration: ToolDeclaration): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+
+  for (const [name, schema] of Object.entries(declaration.parameters) as Array<[string, ParameterSchema]>) {
+    properties[name] = {
+      type: schema.type,
+      description: schema.description,
+      ...(schema.enum ? { enum: [...schema.enum] } : {}),
+      ...(schema.minimum === undefined ? {} : { minimum: schema.minimum }),
+      ...(schema.maximum === undefined ? {} : { maximum: schema.maximum }),
+      ...(schema.maxLength === undefined ? {} : { maxLength: schema.maxLength }),
+    };
+  }
+
+  const bound = new Set(Object.keys(declaration.bindings ?? {}));
+  const required = declaration.required.filter((name) => !bound.has(name));
+  return { type: "object", properties, ...(required.length > 0 ? { required } : {}) };
 }
 
 /**
@@ -77,7 +98,30 @@ export class ToolSystemToolClient implements ToolClient {
       signal,
     );
 
-    return { tool_call_id: request.id, content: describe(report.outcome) };
+    return { tool_call_id: request.id, content: describeToolOutcome(report.outcome) };
+  }
+}
+
+export class ToolSystemRealtimeToolExecutor implements RealtimeToolExecutor {
+  constructor(private readonly runtime: ToolRuntime) {}
+
+  async discover(): Promise<RealtimeToolDeclaration[]> {
+    return this.runtime.discover().map((declaration) => ({
+      name: declaration.name,
+      description: declaration.description,
+      inputSchema: toRealtimeInputSchema(declaration),
+    }));
+  }
+
+  async execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }> {
+    const report = await this.runtime.execute(
+      { tool: input.tool, args: toExecutionArguments(input.arguments), requestId: input.callId },
+      input.signal,
+    );
+    return {
+      content: describeToolOutcome(report.outcome),
+      ...(report.outcome.kind === "error" ? { isError: true } : {}),
+    };
   }
 }
 
@@ -89,7 +133,7 @@ export class ToolSystemToolClient implements ToolClient {
  * stop rather than invent a result; an error must state what went wrong without
  * implying a retry that policy will refuse again.
  */
-function describe(outcome: Awaited<ReturnType<ToolRuntime["execute"]>>["outcome"]): string {
+function describeToolOutcome(outcome: Awaited<ReturnType<ToolRuntime["execute"]>>["outcome"]): string {
   switch (outcome.kind) {
     case "result":
       return outcome.taint === "external"

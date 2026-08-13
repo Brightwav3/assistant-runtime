@@ -9,6 +9,20 @@ New-Item -ItemType Directory -Force -Path $state | Out-Null
 $assistantId = if ($env:ASSISTANT_ID) { $env:ASSISTANT_ID } else { 'assistant.primary' }
 if ($GeminiApiKey) { $env:GEMINI_API_KEY = $GeminiApiKey }
 if (-not $env:GEMINI_API_KEY) {
+  $envPath = Join-Path $root '.env'
+  if (Test-Path -LiteralPath $envPath) {
+    foreach ($line in Get-Content -LiteralPath $envPath) {
+      if ($line -match '^\s*(?:export\s+)?GEMINI_API_KEY\s*=\s*(.*?)\s*$') {
+        $value = $Matches[1].Trim()
+        if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+          $value = $value.Substring(1, $value.Length - 2)
+        }
+        if ($value) { $env:GEMINI_API_KEY = $value; break }
+      }
+    }
+  }
+}
+if (-not $env:GEMINI_API_KEY) {
   $keyFile = Join-Path $state 'gemini-api-key.txt'
   if (Test-Path -LiteralPath $keyFile) { $env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath $keyFile).Trim() }
 }
@@ -21,8 +35,15 @@ if (-not $env:GEMINI_API_KEY) { throw 'GEMINI_API_KEY is required. Add it to .ru
 
 Push-Location $root
 try {
-  npm run verify
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-  Write-Host 'Assistant runtime is starting. Press Ctrl+C to stop.'
+  Write-Host 'Ověřuji assistant runtime...' -ForegroundColor DarkGray
+  $verifyOutput = npm run verify 2>&1
+  $verifyExitCode = $LASTEXITCODE
+  if ($verifyExitCode -ne 0) {
+    Write-Host 'Ověření selhalo:' -ForegroundColor Red
+    $verifyOutput | ForEach-Object { Write-Host $_ }
+    exit $verifyExitCode
+  }
+  Write-Host 'Ověření OK.' -ForegroundColor Green
+  Write-Host 'Assistant runtime se spouští. Ctrl+C program ukončí.'
   node dist/cli/main.js start
 } finally { Pop-Location }

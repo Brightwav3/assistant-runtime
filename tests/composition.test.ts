@@ -34,6 +34,21 @@ test("composition starts real memory/state components with an injected microphon
   try { assert.equal((await restarted.list()).length, 1); } finally { await restarted.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("production composition registers safe host tools for realtime discovery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-tools-"));
+  const composition = await createAssistantRuntime(settingsFor(join(directory, "memory.sqlite")), undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });
+  try {
+    const tools = composition.components.find((component) => component.id === "tools");
+    assert.ok(tools, "production composition must host the realtime tools runtime");
+    assert.deepEqual(await tools.capabilities!(), { tools: ["calculate", "get_time", "system_status", "uptime"] });
+    await composition.runtime.start();
+    assert.equal((await composition.runtime.health()).components.tools?.state, "healthy");
+  } finally {
+    await composition.runtime.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("modular mode exposes a real Scribe/Intelligence/Voice capability boundary", async () => {
   const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-modular-"));
   const composition = await createAssistantRuntime({ ...settingsFor(join(directory, "memory.sqlite")), mode: "modular" }, undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });

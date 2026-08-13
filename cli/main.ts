@@ -1,11 +1,13 @@
 import { AssistantRuntimeError } from "../src/contracts.js";
 import { createAssistantRuntime } from "../src/composition.js";
 import { loadRuntimeSettings } from "../src/config.js";
+import { createHumanTrace } from "../src/console-log.js";
 import { PCM_PLAYER, verifyPlayback } from "../src/adapters.js";
 import { memoryKinds, type CreateMemoryInput, type MemoryKind } from "memory-core";
 
 const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const args = process.argv.slice(3);
+let humanStart = false;
 const flag = (name: string): string | undefined => args.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -31,32 +33,40 @@ async function memoryCommand(): Promise<void> {
 
 async function main(): Promise<void> {
   const command = process.argv[2];
+  humanStart = command === "start" && !args.includes("--json");
   if (command === "memory") return memoryCommand();
   const settings = await loadRuntimeSettings();
-  const composition = await createAssistantRuntime(settings, (event) => json(event));
+  const trace = humanStart ? createHumanTrace() : (event: Record<string, unknown>) => json(event);
+  const composition = await createAssistantRuntime(settings, trace);
   const runtime = composition.runtime;
   if (command === "health") json(await runtime.health());
   else if (command === "capabilities") json({ ...runtime.capabilities(), components: await runtime.componentCapabilities(), player: { executable: PCM_PLAYER.executable, sampleRate: settings.realtime.outputSampleRate } });
   else if (command === "status") json(runtime.status());
   else if (command === "start") {
     const playback = await verifyPlayback(settings.realtime.outputSampleRate);
-    json({ type: "playback.preflight", ...playback });
+    trace({ type: "playback.preflight", ...playback });
     if (!playback.ok) throw new Error(playback.message);
     await runtime.start();
-    json(runtime.status());
+    if (humanStart) trace({ type: "runtime.started" });
+    else json(runtime.status());
     await new Promise<void>((resolve) => {
       let stopped = false;
       const stop = () => { if (stopped) return; stopped = true; void runtime.stop().finally(resolve); };
       process.once("SIGINT", stop); process.once("SIGTERM", stop);
     });
   } else {
-    json({ error: { code: "COMMAND_INVALID", message: "Use start, health, capabilities, status, or memory." } });
+    json({ error: { code: "COMMAND_INVALID", message: "Use start [--json], health, capabilities, status, or memory." } });
     process.exitCode = 2;
   }
 }
 
 void main().catch((error) => {
   const code = error instanceof AssistantRuntimeError ? error.code : "RUNTIME_ERROR";
+  if (humanStart) {
+    process.stderr.write(`CHYBA: ${message(error)}\n`);
+    process.exitCode = 1;
+    return;
+  }
   json({ error: { code, message: message(error) } });
   process.exitCode = 1;
 });

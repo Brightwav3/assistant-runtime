@@ -1,4 +1,4 @@
-# Hardware smoke test
+# Mark I hardware smoke test
 
 Proves the native path end to end on real hardware:
 
@@ -9,13 +9,18 @@ double clap → microphone → Gemini Live → speaker → memory survives a res
 Automated tests cover everything except the physical devices. This is the part
 CI can never run, so it is recorded here by hand.
 
+The explicit native realtime tool probe is documented separately in
+[`docs/realtime-tools-smoke-test.md`](./realtime-tools-smoke-test.md). It is
+not enabled by this general hardware path because it launches a process. The
+safe read-only tools are part of the normal Mark I path.
+
 ## Prerequisites
 
 | Requirement | Check |
 | --- | --- |
 | Node 22+ | `node --version` |
 | ffmpeg and ffplay on PATH | `where ffplay` — install with `winget install Gyan.FFmpeg` |
-| A Gemini API key | set in the current shell only, never committed |
+| A Gemini API key | put in ignored `.env` as `GEMINI_API_KEY=<key>` |
 | A working capture device | `./check-microphone.ps1 -List` |
 | Built cores | every core publishes from `dist/`, so build them first |
 
@@ -64,11 +69,13 @@ when the default is the wrong device, and then use the name marked `*` by
 ## 3. Provide the key
 
 ```powershell
-$env:GEMINI_API_KEY = "<key>"
+Copy-Item .env.example .env
+notepad .env
 ```
 
-The key lives in the shell for this session only. `start-jarvis.ps1` also reads
-`.runtime\gemini-api-key.txt` if it exists; that path is git-ignored.
+Put the key after `GEMINI_API_KEY=` and save the file. `.env` is git-ignored;
+`start-jarvis.ps1` also accepts an explicit process variable or its legacy
+`.runtime\gemini-api-key.txt` fallback.
 
 ## 4. Preflight without speaking
 
@@ -88,7 +95,9 @@ every component reports `degraded: not started` — that is expected, not a faul
 ```
 
 The launcher verifies the build, runs the playback preflight and then starts.
-`playback.preflight` must report `ok: true` before activation is possible.
+The default console is human-readable; use `node dist/cli/main.js start --json`
+when recording the full event stream. Audio preflight must report `ok: true`
+before activation is possible.
 
 ## 6. What to record
 
@@ -96,7 +105,7 @@ Run through each step and write down what actually happened.
 
 | # | Step | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Clap twice | `activation.detected` in the event stream | **PASS** 2026-08-12, fired reliably on repeated attempts |
+| 1 | Clap twice | `Aktivace zachycena.` in the human log, or `activation.detected` in JSON | **PASS** 2026-08-12, fired reliably on repeated attempts |
 | 2 | — | `realtime.session.started` | **PASS** |
 | 3 | Say a sentence | `realtime.transcript.final` with `source: "input"` | **PASS** |
 | 4 | — | Assistant answers through the speaker | **PASS**, audible |
@@ -105,6 +114,7 @@ Run through each step and write down what actually happened.
 | 7 | Wait out `inactivityMs` | interaction ends by itself | **PASS** |
 | 8 | Ctrl+C, restart, ask about the fact | the assistant still knows it | **PASS**, memory survived a restart |
 | 9 | `node dist/cli/main.js memory list` | the summary is present | **PASS** |
+| 10 | Ask for time, system status, and a calculation | tool calls execute and the spoken answer uses their results | **PASS** 2026-08-13, `get_time`, `system_status`, and `calculate` executed on hardware |
 
 ## Known limitations to confirm or refute
 

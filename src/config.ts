@@ -12,6 +12,42 @@ export interface RuntimeSettings {
   state: { enabled: boolean };
 }
 
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function parseEnvValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))) {
+    const quote = trimmed[0];
+    const unquoted = trimmed.slice(1, -1);
+    return quote === '"' ? unquoted.replaceAll("\\n", "\n").replaceAll('\\"', '"').replaceAll("\\\\", "\\") : unquoted;
+  }
+  return trimmed.replace(/\s+#.*$/, "").trim();
+}
+
+/** Loads simple KEY=value entries without replacing explicitly supplied process variables. */
+export async function loadDotEnv(filePath = resolve(process.cwd(), ".env")): Promise<void> {
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isMissingFile(error)) return;
+    throw error;
+  }
+
+  for (const line of content.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!match) continue;
+    const [, name, rawValue] = match;
+    const value = parseEnvValue(rawValue);
+    if (!value) continue;
+    if (process.env[name] === undefined || process.env[name] === "") process.env[name] = value;
+  }
+}
+
 const defaults: RuntimeSettings = {
   assistantId: "assistant.primary",
   mode: "native_realtime",
@@ -39,6 +75,7 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
 }
 
 export async function loadRuntimeSettings(configPath = process.env.JARVIS_CONFIG ?? resolve(process.cwd(), "config.json")): Promise<RuntimeSettings> {
+  await loadDotEnv(resolve(configPath, "..", ".env"));
   try {
     await access(configPath);
   } catch {

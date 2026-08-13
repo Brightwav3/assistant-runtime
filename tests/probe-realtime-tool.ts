@@ -6,11 +6,13 @@
 
 import { spawn } from "node:child_process";
 import { createAssistantRuntime } from "../src/composition.js";
-import { loadRuntimeSettings } from "../src/config.js";
+import { loadDotEnv, loadRuntimeSettings } from "../src/config.js";
 import { ToolSystemRealtimeToolExecutor } from "../src/tool-bridge.js";
 import { AllowlistPolicy, AllowlistProcessBroker, ToolRegistry, ToolRuntime, openAppDeclaration, openAppHandler } from "tool-system";
 
 const writeTrace = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`);
+
+await loadDotEnv();
 
 if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY must be set in the current process environment.");
 

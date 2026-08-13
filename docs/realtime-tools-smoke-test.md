@@ -21,7 +21,7 @@ must never be enabled by the default composition.
 - Node.js 22 or newer.
 - A working microphone and speaker.
 - `ffplay.exe` on `PATH`.
-- `GEMINI_API_KEY` available only in the current process environment.
+- `.env` copied from `.env.example` with `GEMINI_API_KEY=<key>`; the file is ignored by Git.
 - The repository dependencies installed.
 
 ## Run
@@ -31,14 +31,15 @@ From `C:\Users\Sajmon\Jarvis\assistant-runtime`:
 ```powershell
 npm install
 npm run build
-$env:GEMINI_API_KEY = "<key>"
+npm run typecheck
 npx tsx tests/probe-realtime-tool.ts
 ```
 
 The probe creates exactly one catalogued capability, `open_app` with the
 logical value `calculator` mapped to `calc.exe`. The Tool System policy and
-process broker are explicitly allowlisted in the probe. No key is written to a
-file.
+process broker are explicitly allowlisted in the probe. The probe loads the
+local `.env`; an already-set `GEMINI_API_KEY` process value takes precedence.
+No key is printed or committed.
 
 1. Wait for `{"type":"probe.ready",...}`.
 2. Double-clap to activate the native realtime session.

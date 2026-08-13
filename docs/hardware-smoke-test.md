@@ -19,7 +19,7 @@ not enabled by this general hardware path and must be injected deliberately.
 | --- | --- |
 | Node 22+ | `node --version` |
 | ffmpeg and ffplay on PATH | `where ffplay` — install with `winget install Gyan.FFmpeg` |
-| A Gemini API key | set in the current shell only, never committed |
+| A Gemini API key | put in ignored `.env` as `GEMINI_API_KEY=<key>` |
 | A working capture device | `./check-microphone.ps1 -List` |
 | Built cores | every core publishes from `dist/`, so build them first |
 
@@ -68,11 +68,13 @@ when the default is the wrong device, and then use the name marked `*` by
 ## 3. Provide the key
 
 ```powershell
-$env:GEMINI_API_KEY = "<key>"
+Copy-Item .env.example .env
+notepad .env
 ```
 
-The key lives in the shell for this session only. `start-jarvis.ps1` also reads
-`.runtime\gemini-api-key.txt` if it exists; that path is git-ignored.
+Put the key after `GEMINI_API_KEY=` and save the file. `.env` is git-ignored;
+`start-jarvis.ps1` also accepts an explicit process variable or its legacy
+`.runtime\gemini-api-key.txt` fallback.
 
 ## 4. Preflight without speaking
 

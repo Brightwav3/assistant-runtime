@@ -14,7 +14,7 @@ node dist/cli/main.js start
 
 ## One-click local launcher
 
-Copy `config.example.json` to ignored `config.json` for local overrides, set `GEMINI_API_KEY`, then run `start-jarvis.ps1`. Stop it with `Ctrl+C`. Automatic conversation summaries are stored in `C:\Users\Sajmon\Jarvis\.runtime\memory.sqlite`; use `reset-memory.ps1` for the explicit destructive memory reset.
+Copy `config.example.json` to ignored `config.json`, copy `.env.example` to `.env`, put `GEMINI_API_KEY=<key>` in `.env`, then run `start-jarvis.ps1`. Stop it with `Ctrl+C`. `.env` is ignored by Git and the loader never prints its contents. Automatic conversation summaries are stored in `C:\Users\Sajmon\Jarvis\.runtime\memory.sqlite`; use `reset-memory.ps1` for the explicit destructive memory reset.
 
 All diagnostic commands produce one JSON object. `start` runs until `SIGINT` or `SIGTERM`.
 
@@ -40,4 +40,4 @@ node dist/cli/main.js memory forget --id=<memory-id> --json
 
 ## Current integration note
 
-The repository provides a production composition root and tested adapter contracts. No private-source import is used here. Real local/hardware smoke tests still require a Windows microphone, speaker, `ffplay.exe`, and `GEMINI_API_KEY`.
+The repository provides a production composition root and tested adapter contracts. No private-source import is used here. Real local/hardware smoke tests still require a Windows microphone, speaker, `ffplay.exe`, and `GEMINI_API_KEY` loaded from the local `.env` or explicitly supplied process environment.

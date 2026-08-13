@@ -30,6 +30,7 @@ Activation, Intelligence, Memory, State, and Speech public package entry points 
 - Native inactivity timeout resets on speech activity; provider-closed sessions clear stale microphone routing without unhandled rejections.
 - Native realtime input is split into 320-sample/20 ms frames; pre-connect audio retains only the newest 500 ms and reports dropped frames.
 - Realtime tool calls use an explicitly injected `ToolSystemRealtimeToolExecutor`; the default composition advertises no host tools.
+- Local Gemini credentials are loaded from ignored `.env` files without logging or committing their values; explicit process variables still take precedence.
 - `remove-jarvis-wiring.ps1` preserves memory; `reset-memory.ps1` is the explicit memory deletion command.
 
 ## Remaining work

@@ -39,6 +39,10 @@ jobs:
         with:
           repository: Brightwav3/state-core
           path: state-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/tool-system
+          path: tool-system
       - uses: actions/setup-node@v4
         with:
           node-version: 22

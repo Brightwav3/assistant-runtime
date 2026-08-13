@@ -10,6 +10,10 @@ export interface RuntimeComponent {
 export interface Activation { activationId: string; timestamp: string; source?: string }
 export interface ActivationSource extends RuntimeComponent { subscribe(handler: (activation: Activation) => void): () => void }
 export interface NativeRealtimeDriver { open(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<{ close(): Promise<void>; done: Promise<void> }> }
+export interface RealtimeToolExecutor {
+  discover(): Promise<RealtimeToolDeclaration[]>;
+  execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }>;
+}
 export interface ModularDriver { run(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<void> }
 export interface StatePublisher { set(input: { key: string; value: string | boolean; source: { sourceType: "system"; sourceId: string } }): Promise<unknown> }
 export interface RuntimeConfig { assistantId: string; mode: InteractionMode; inactivityMs: number; state?: StatePublisher }
@@ -20,3 +24,4 @@ export interface AssistantCapabilities { activation: boolean; nativeRealtime: bo
 export class AssistantRuntimeError extends Error {
   constructor(public readonly code: "RUNTIME_NOT_STARTED" | "CONFIGURATION_INVALID" | "MODE_UNAVAILABLE" | "INTERACTION_NOT_FOUND", message: string) { super(message); this.name = "AssistantRuntimeError"; }
 }
+import type { RealtimeToolDeclaration } from "realtime-core";

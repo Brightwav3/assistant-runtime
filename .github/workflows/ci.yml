@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for dir in core-runtime activation-core intelligence-core memory-core state-core "speech-system/realtime core" "speech-system/scribe core" "speech-system/voice core"; do
+          for dir in core-runtime activation-core intelligence-core memory-core state-core tool-system "speech-system/realtime core" "speech-system/scribe core" "speech-system/voice core"; do
             echo "::group::$dir"
             (cd "$dir" && npm install --no-audit --no-fund && npm run build)
             echo "::endgroup::"

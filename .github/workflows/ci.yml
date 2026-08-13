@@ -6,8 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Assistant Runtime composes sibling cores through relative file: dependencies,
-# so CI reproduces the local directory layout before installing.
+# Assistant Runtime composes sibling cores and host tools through relative
+# file: dependencies, so CI reproduces the local directory layout before
+# installing.
 jobs:
   verify:
     runs-on: windows-latest
@@ -39,6 +40,16 @@ jobs:
         with:
           repository: Brightwav3/state-core
           path: state-core
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/tool-system
+          ref: main
+          path: tool-system
+      - uses: actions/checkout@v4
+        with:
+          repository: Brightwav3/host-tools
+          ref: main
+          path: host-tools
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -50,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for dir in core-runtime activation-core intelligence-core memory-core state-core "speech-system/realtime core" "speech-system/scribe core" "speech-system/voice core"; do
+          for dir in tool-system core-runtime activation-core intelligence-core memory-core state-core "speech-system/realtime core" "speech-system/scribe core" "speech-system/voice core" host-tools; do
             echo "::group::$dir"
             (cd "$dir" && npm install --no-audit --no-fund && npm run build)
             echo "::endgroup::"

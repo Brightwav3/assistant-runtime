@@ -121,7 +121,11 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     let config: RealtimeSessionConfig;
     try {
       config = typeof this.config === "function" ? await this.config() : this.config;
-      if (this.toolExecutor) config = { ...config, tools: await this.toolExecutor.discover() };
+      if (this.toolExecutor) {
+        const tools = await this.toolExecutor.discover();
+        config = { ...config, tools };
+        this.trace({ type: "realtime.tools.discovered", timestampMs: Date.now(), count: tools.length, tools: tools.map((tool) => tool.name) });
+      }
     } catch (error) {
       this.opening = false;
       this.pendingFrames = [];

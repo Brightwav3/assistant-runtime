@@ -1,4 +1,4 @@
-# Assistant Runtime v0.1 — Completion Workplan
+# Assistant Runtime v0.1 — Mark I Completion Workplan
 
 ## Goal
 
@@ -10,16 +10,16 @@ Deliver one headless, persistent assistant runtime. One command starts all confi
 
 ## Current evidence
 
-Verified: Windows double-clap activation, production composition, Gemini Live microphone-to-speaker wiring, barge-in handling, persistent SQLite conversation summaries, restart-safe memory, State Core publication, timeout and shutdown behavior, public package exports, and 15 offline integration tests.
+Verified: Windows double-clap activation, production composition, Gemini Live microphone-to-speaker wiring, barge-in handling, persistent SQLite conversation summaries, restart-safe memory, State Core publication, timeout and shutdown behavior, public package exports, safe realtime tool execution, and the compact human-readable console.
 
-Remaining: real native microphone/speaker/Gemini smoke verification, intermittent real-microphone speech-detection hardening, automatic reopening after `realtime.session.closed`, intelligent preference/fact extraction, and full hardware verification of the modular Scribe → Intelligence → Voice path.
+Mark I hardware evidence: the native path and default `get_time`, `system_status`, and `calculate` tools were exercised on Windows with Gemini Live on 2026-08-13. Remaining work is outside the Mark I boundary: intermittent real-microphone speech-detection hardening, automatic reopening after `realtime.session.closed`, intelligent preference/fact extraction, and full hardware verification of the modular Scribe → Intelligence → Voice path.
 
 ## Scope
 
 - One configuration-driven composition root and CLI.
 - Activation Core with Windows microphone/double-clap source.
 - Native realtime path: microphone PCM -> Gemini Live -> speaker PCM.
-- Optional native realtime tool loop: Gemini tool calls -> injected Tool System executor -> provider result.
+- Native realtime tool loop: Gemini tool calls -> Tool System executor -> provider result. The default composition exposes only safe read-only tools; side-effecting capabilities require explicit injection and policy.
 - Persistent SQLite Memory Core with automatic compact conversation summaries and explicit, privacy-safe durable facts.
 - State Core with live interaction/speech facts.
 - Optional modular path: Scribe -> Intelligence -> Voice.
@@ -28,7 +28,7 @@ Remaining: real native microphone/speaker/Gemini smoke verification, intermitten
 
 ## Non-goals
 
-- GUI, cloud memory sync, automatic recording of raw audio, full audio archive, tool platform implementation, device protocol implementation, wake-word model, or committing credentials. Tool execution is delegated to an explicitly injected Tool System runtime.
+- GUI, cloud memory sync, automatic recording of raw audio, full audio archive, tool platform implementation, device protocol implementation, wake-word model, or committing credentials. Side-effecting tool execution is delegated to an explicitly injected and policy-controlled Tool System runtime.
 
 ## Configuration and secrets
 

@@ -35,8 +35,15 @@ if (-not $env:GEMINI_API_KEY) { throw 'GEMINI_API_KEY is required. Add it to .ru
 
 Push-Location $root
 try {
-  npm run verify
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-  Write-Host 'Assistant runtime is starting. Press Ctrl+C to stop.'
+  Write-Host 'Ověřuji assistant runtime...' -ForegroundColor DarkGray
+  $verifyOutput = npm run verify 2>&1
+  $verifyExitCode = $LASTEXITCODE
+  if ($verifyExitCode -ne 0) {
+    Write-Host 'Ověření selhalo:' -ForegroundColor Red
+    $verifyOutput | ForEach-Object { Write-Host $_ }
+    exit $verifyExitCode
+  }
+  Write-Host 'Ověření OK.' -ForegroundColor Green
+  Write-Host 'Assistant runtime se spouští. Ctrl+C program ukončí.'
   node dist/cli/main.js start
 } finally { Pop-Location }

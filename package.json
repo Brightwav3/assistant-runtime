@@ -28,6 +28,7 @@
     "voice-core": "file:../speech-system/voice core",
     "intelligence-core": "file:../intelligence-core",
     "memory-core": "file:../memory-core",
+    "host-tools": "file:../host-tools",
     "state-core": "file:../state-core",
     "core-runtime": "file:../core-runtime",
     "tool-system": "file:../tool-system"

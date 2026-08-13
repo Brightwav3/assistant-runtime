@@ -15,11 +15,13 @@ The native realtime boundary is:
 ```text
 capture chunks -> 320-sample frameizer -> RealtimeCoreAdapter
                                      -> RealtimeSpeechSession
-Gemini tool.requested -> injected RealtimeToolExecutor -> ToolRuntime
+Gemini tool.requested -> RealtimeToolExecutor -> ToolRuntime
                       -> provider-specific tool result
 ```
 
 The adapter owns a newest-500-ms pre-connect buffer and aggregate traces. Tool
 validation, policy, guards, broker access, cancellation, and outcome rendering
-remain in Tool System. An empty composition option means no realtime tools are
-advertised or enabled.
+remain in Tool System. The production composition supplies a safe read-only
+catalogue (`get_time`, `calculate`, `uptime`, `system_status`) through the same
+bridge. A caller-provided executor replaces that catalogue; side-effecting
+capabilities such as `open_app` remain explicit opt-ins.

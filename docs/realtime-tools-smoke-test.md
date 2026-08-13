@@ -1,5 +1,11 @@
 # Native realtime tool smoke test
 
+Mark I's normal composition already exposes four safe read-only tools:
+`calculate`, `get_time`, `system_status`, and `uptime`. The 2026-08-13 hardware
+run confirmed that Gemini discovered and executed those tools. This document
+covers the separate `open_app` probe because launching a host process is a
+side effect and must remain explicitly enabled.
+
 This probe verifies the explicit Mark I path:
 
 ```text
@@ -13,8 +19,9 @@ Gemini Live tool.requested
 ```
 
 The probe is manual-only. It is not part of `npm run verify`, it requires a
-real microphone, speaker, Gemini credentials, and Windows Calculator, and it
-must never be enabled by the default composition.
+real microphone, speaker, Gemini credentials, and Windows Calculator. The
+normal composition already exposes safe read-only tools; this probe adds the
+side-effecting `open_app` capability explicitly and must remain opt-in.
 
 ## Prerequisites
 

@@ -112,6 +112,60 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
       return;
     }
 
+    // Delegation is the one thing the operator cannot infer from the conversation: the
+    // gap between "I'll look into that" and the answer is otherwise silent, and silence
+    // looks identical whether the background model is working or has died.
+    if (type === "delegation.accepted") {
+      print("Deleguji na pozadí…");
+      return;
+    }
+
+    if (type === "delegation.tool") {
+      const tool = asText(event.tool);
+      const outcome = asText(event.outcome);
+      print(`  └ pozadí: ${tool || "nástroj"} → ${outcome === "result" ? "ok" : outcome} (${asCount(event.durationMs)} ms)`);
+      return;
+    }
+
+    if (type === "delegation.completed") {
+      print("Výsledek delegace dorazil.");
+      return;
+    }
+
+    if (type === "delegation.delivery.queued") {
+      print("  └ čekám, až domluvím, pak výsledek předám.");
+      return;
+    }
+
+    if (type === "delegation.delivery.degraded") {
+      // Worth surfacing: it means the provider would not take the result natively.
+      print("  └ POZOR: nativní vložení kontextu nedostupné, používám náhradní cestu.");
+      return;
+    }
+
+    if (type === "delegation.delivery.sent") {
+      print("  └ výsledek předán do konverzace.");
+      return;
+    }
+
+    if (type === "delegation.delivery.dropped") {
+      print(`  └ výsledek zahozen: ${asText(event.reason) || "neznámý důvod"}.`);
+      return;
+    }
+
+    if (type === "delegation.failed" || type === "delegation.cancelled") {
+      const failure = event.failure as { code?: unknown } | undefined;
+      print(`Delegace ${type === "delegation.failed" ? "selhala" : "zrušena"}: ${asText(failure?.code) || "neznámý kód"}.`);
+      return;
+    }
+
+    if (type === "delegation.disabled") {
+      print(`Delegace vypnuta: ${asText(event.reason) || "neznámý důvod"}.`);
+      return;
+    }
+
+    if (type === "delegation.created" || type === "delegation.started" || type === "delegation.progress" || type === "delegation.session.bound" || type === "tools.voice.catalogue") return;
+
     if (type === "realtime.session.closed") {
       flushOutput();
       print("Realtime relace ukončena.");

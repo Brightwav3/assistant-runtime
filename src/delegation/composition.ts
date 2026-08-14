@@ -109,6 +109,18 @@ export function createDelegation(input: DelegationCompositionInput): DelegationC
   const delegatedTools = new ToolRuntime({
     registry: delegatedRegistry,
     policy: new AllowlistPolicy({ allow: [MEMORY_SEARCH_TOOL, MEMORY_VIEW_TOOL] }),
+    // Without this the delegated model's tool calls happen entirely invisibly: the
+    // operator sees a delegation start and an answer appear, with nothing in between.
+    // Parameter *names* only — Tool System's trace never carries argument values.
+    trace: {
+      record: (entry) => trace({
+        type: "delegation.tool",
+        tool: entry.tool,
+        outcome: entry.outcomeKind,
+        durationMs: entry.durationMs,
+        ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+      }),
+    },
   });
 
   const action = new ActionRuntime({

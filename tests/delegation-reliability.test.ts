@@ -104,6 +104,9 @@ test("a model failure surfaces as a bounded failure and never leaks the provider
     })(),
   });
 
+  // Awaited rather than slept on: the gateway backs off before retrying a failure it
+  // considers transient, so any fixed delay here is a guess that will eventually be wrong.
+  const failed = new Promise<void>((resolve) => composition.broker.onEvent((event) => { if (event.type === "delegation.failed") resolve(); }));
   await composition.broker.accept({
     requestId: "req-1", sessionId: "session-1", goal: "najdi robota",
     selectedMemoryIds: [], selectedContext: [],
@@ -111,7 +114,7 @@ test("a model failure surfaces as a bounded failure and never leaks the provider
     cancelOnSessionClose: true, maximumModelCalls: 1, maximumToolCalls: 1,
     delivery: { mode: "when_idle", lateResult: "queue" },
   });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await failed;
 
   assert.ok(traces.some((event) => event.type === "delegation.failed"));
   assert.equal(JSON.stringify(traces).includes("sk-secret-value"), false);

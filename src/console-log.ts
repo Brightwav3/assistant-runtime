@@ -155,6 +155,10 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
 
     if (type === "delegation.failed" || type === "delegation.cancelled") {
       const failure = event.failure as { code?: unknown } | undefined;
+      if (asText(failure?.code) === "MODEL_RATE_LIMITED") {
+        print("Delegace selhala: vyčerpaná kvóta nebo rychlostní limit API. Zkuste to za chvíli, nebo použijte jiný model či klíč.");
+        return;
+      }
       print(`Delegace ${type === "delegation.failed" ? "selhala" : "zrušena"}: ${asText(failure?.code) || "neznámý kód"}.`);
       return;
     }

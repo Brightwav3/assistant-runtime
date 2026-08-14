@@ -234,7 +234,11 @@ export class RuntimeDelegationBroker implements DelegationBroker {
 
 /** Failures cross this boundary as a code and a retry flag only — never a provider stack trace. */
 function toFailure(cause: unknown): DelegationFailure {
-  const code = typeof cause === "object" && cause !== null && "code" in cause ? String((cause as { code: unknown }).code) : "DELEGATION_FAILED";
-  const retryable = typeof cause === "object" && cause !== null && "retryable" in cause ? Boolean((cause as { retryable: unknown }).retryable) : false;
+  const error = typeof cause === "object" && cause !== null ? cause as { code?: unknown; retryable?: unknown; context?: { status?: unknown } } : undefined;
+  const code = error?.code === undefined ? "DELEGATION_FAILED" : String(error.code);
+  const retryable = Boolean(error?.retryable);
+  // A quota refusal and a broken integration both arrived as MODEL_PROVIDER_FAILED, and
+  // they call for completely different actions. The status is a number, not content.
+  if (error?.context?.status === 429) return { code: "MODEL_RATE_LIMITED", retryable: true };
   return { code, retryable };
 }

@@ -23,6 +23,14 @@ export interface EchoCancellationSettings {
   processor: "adaptive" | "gate" | "auto";
   /** Suppression tail after playback stops, covering output latency. Bluetooth runs 150-300 ms. */
   tailMs: number;
+  /**
+   * Upper bound of the delay search, in ms. It must cover the whole path from handing a
+   * chunk to the player to hearing it back: the player's own buffering plus the output
+   * latency. AEC System defaults to 500 ms for the acoustic path alone, which is not enough
+   * once `ffplay` and a Bluetooth speaker are both in the way — and a delay outside the
+   * window means the filter never converges and the gate never lets go.
+   */
+  maxDelayMs: number;
   /** Echo return loss enhancement, in dB, below which `auto` stops trusting the adaptive filter. */
   minErleDb: number;
   /** Consecutive healthy frames required before `auto` returns to the adaptive filter. */
@@ -78,7 +86,7 @@ const defaults: RuntimeSettings = {
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
-  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, minErleDb: 6, recoveryFrames: 25 },
+  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -98,6 +106,7 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   const echo = settings.echoCancellation;
   if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "auto") throw new Error("echoCancellation.processor must be adaptive, gate, or auto.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");
+  if (!Number.isFinite(echo.maxDelayMs) || echo.maxDelayMs <= 0) throw new Error("echoCancellation.maxDelayMs must be greater than zero.");
   if (!Number.isFinite(echo.minErleDb)) throw new Error("echoCancellation.minErleDb must be a number.");
   if (!Number.isInteger(echo.recoveryFrames) || echo.recoveryFrames < 1) throw new Error("echoCancellation.recoveryFrames must be a positive integer.");
   if (echo.recordDir && !isAbsolute(echo.recordDir)) echo.recordDir = resolve(basePath, echo.recordDir);

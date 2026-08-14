@@ -15,7 +15,7 @@ const settingsFor = (path: string): RuntimeSettings => ({
   realtime: { provider: "gemini", inputSampleRate: 16000, outputSampleRate: 24000 },
   memory: { enabled: true, path, scopeSubjectId: "test-user" },
   state: { enabled: true },
-  echoCancellation: { enabled: false, processor: "auto" as const, tailMs: 400, minErleDb: 6, recoveryFrames: 25 },
+  echoCancellation: { enabled: false, processor: "auto" as const, tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 },
 });
 
 test("composition starts real memory/state components with an injected microphone", async () => {

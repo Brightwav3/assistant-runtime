@@ -38,6 +38,16 @@ export class EchoGuard {
   private usingGate = false;
   private framesProcessed = 0;
   private recorders?: { reference: WriteStream; capture: WriteStream; cleaned: WriteStream };
+  /**
+   * Host-clock time the recordings start at, and how many samples of each have been
+   * written. The two streams only mean anything together if they share a timeline: the
+   * assistant is silent for most of a conversation, so writing reference chunks back to
+   * back produces a file that is 42% as long as the capture beside it and aligned with it
+   * nowhere. Gaps are padded with the silence that was actually playing.
+   */
+  private recordEpochMs?: number;
+  private referenceSamplesWritten = 0;
+  private captureSamplesWritten = 0;
 
   constructor(
     private readonly settings: EchoCancellationSettings,
@@ -49,6 +59,7 @@ export class EchoGuard {
     const config = resolveConfig({
       captureFormat: { sampleRate: captureSampleRate },
       gate: { tailMs: settings.tailMs },
+      delay: { maxDelayMs: settings.maxDelayMs },
     });
     // Both processors are constructed when the mode can use either, so a fallback is a
     // decision rather than a cold start: the gate needs no convergence, but the adaptive
@@ -88,7 +99,9 @@ export class EchoGuard {
     const frame: AudioFrame = { streamId: "assistant-playback", timestampMs: startMs, format: this.referenceFormat, data };
     this.adaptive?.pushReference(frame);
     this.gate?.pushReference(frame);
-    this.recorders?.reference.write(pcmBytes(data));
+    if (this.recorders) {
+      this.referenceSamplesWritten = this.recordAligned(this.recorders.reference, startMs, this.referenceSamplesWritten, this.referenceSampleRate, data);
+    }
   }
 
   /** What the microphone heard. Returns what the provider should be given instead. */
@@ -100,8 +113,9 @@ export class EchoGuard {
 
     const cleaned = this.choose(adaptive?.data, gate?.data) ?? data;
     if (this.recorders) {
-      this.recorders.capture.write(pcmBytes(data));
-      this.recorders.cleaned.write(pcmBytes(cleaned));
+      const written = this.recordAligned(this.recorders.capture, frame.timestampMs, this.captureSamplesWritten, this.captureSampleRate, data);
+      this.recordAligned(this.recorders.cleaned, frame.timestampMs, this.captureSamplesWritten, this.captureSampleRate, cleaned);
+      this.captureSamplesWritten = written;
     }
     if (this.framesProcessed % 50 === 0) this.trace({ type: "echo.metrics", timestampMs: this.now(), ...this.metrics() });
     return cleaned;
@@ -141,11 +155,27 @@ export class EchoGuard {
     return this.usingGate ? gate : adaptive;
   }
 
+  /**
+   * Writes `data` at the position its timestamp implies, padding any gap with silence, and
+   * returns the new write position. Without this the recordings cannot be fed back through
+   * the offline CLI, because a delay measured between two files that do not share a
+   * timeline is not the delay of anything.
+   */
+  private recordAligned(stream: WriteStream, startMs: number, written: number, rate: number, data: Int16Array): number {
+    this.recordEpochMs ??= startMs;
+    const position = Math.max(0, Math.round(((startMs - this.recordEpochMs) * rate) / 1000));
+    if (position > written) stream.write(Buffer.alloc((position - written) * 2));
+    const at = Math.max(position, written);
+    stream.write(pcmBytes(data));
+    return at + data.length;
+  }
+
   /** What this guard is configured to do, readable before a session exists. */
   describe(): Record<string, unknown> {
     return {
       processor: this.settings.processor,
       tailMs: this.settings.tailMs,
+      maxDelayMs: this.settings.maxDelayMs,
       minErleDb: this.settings.minErleDb,
       preservesFullDuplex: this.settings.processor !== "gate",
       recording: Boolean(this.settings.recordDir),
@@ -183,6 +213,9 @@ export class EchoGuard {
     void this.close();
     const target = isAbsolute(directory) ? directory : resolve(basePath, directory);
     mkdirSync(target, { recursive: true });
+    this.recordEpochMs = undefined;
+    this.referenceSamplesWritten = 0;
+    this.captureSamplesWritten = 0;
     const path = (name: string) => resolve(target, `${sessionId}.${name}.pcm`);
     this.recorders = {
       reference: createWriteStream(path(`reference-${this.referenceSampleRate}`)),

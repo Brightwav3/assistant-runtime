@@ -18,7 +18,7 @@ const settingsFor = (path: string): RuntimeSettings => ({
   realtime: { provider: "gemini", inputSampleRate: 16000, outputSampleRate: 24000 },
   memory: { enabled: false, path, scopeSubjectId: "test-user" },
   state: { enabled: false },
-  echoCancellation: { enabled: false, processor: "auto" as const, tailMs: 400, minErleDb: 6, recoveryFrames: 25 },
+  echoCancellation: { enabled: false, processor: "auto" as const, tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 },
 });
 
 test("normalizePlatform only recognises the three supported host families", () => {

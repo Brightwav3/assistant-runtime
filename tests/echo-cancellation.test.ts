@@ -12,7 +12,7 @@ const CAPTURE_FRAME = 320; // 20 ms
 const REFERENCE_CHUNK = 480; // 20 ms
 const ECHO_DELAY_SAMPLES = 3210; // ~200 ms, the Bluetooth range measured on the failing hardware
 
-const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, minErleDb: 6, recoveryFrames: 25 };
+const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 };
 
 /** Deterministic PRNG, so a failure reproduces identically. */
 function random(seed: number): () => number {
@@ -186,4 +186,31 @@ test("gate-only and adaptive-only modes build only what they need", async () => 
 test("disabled configuration produces no guard at all", () => {
   assert.equal(createEchoGuard({ ...SETTINGS, enabled: false }, CAPTURE_RATE, REFERENCE_RATE, () => {}), undefined);
   assert.ok(createEchoGuard(SETTINGS, CAPTURE_RATE, REFERENCE_RATE, () => {}) instanceof EchoGuard);
+});
+
+test("the recordings share one timeline, so they can be measured against each other", async () => {
+  // The assistant is silent for most of a conversation. Writing reference chunks back to
+  // back produces a file shorter than the capture beside it and aligned with it nowhere,
+  // which makes an offline delay measurement meaningless.
+  const directory = mkdtempSync(resolve(tmpdir(), "aec-align-"));
+  let clock = 2_000_000;
+  const guard = new EchoGuard({ ...SETTINGS, recordDir: directory }, CAPTURE_RATE, REFERENCE_RATE, () => {}, () => clock);
+  guard.beginSession("aligned");
+
+  const silence = new Int16Array(CAPTURE_FRAME);
+  const chunk = toInt16(speechLike(REFERENCE_CHUNK, 7));
+  // One second of capture with nothing playing, then a second of capture with playback.
+  for (let i = 0; i < 50; i += 1) { guard.processCapture(silence); clock += 20; }
+  for (let i = 0; i < 50; i += 1) { guard.pushPlayback(chunk); guard.processCapture(silence); clock += 20; }
+  await guard.close();
+
+  const reference = readFileSync(resolve(directory, "aligned.reference-24000.pcm"));
+  const capture = readFileSync(resolve(directory, "aligned.capture-16000.pcm"));
+  assert.equal(capture.byteLength / 2 / CAPTURE_RATE, 2, "two seconds of capture");
+  assert.equal(reference.byteLength / 2 / REFERENCE_RATE, 2, "the reference must cover the same two seconds");
+
+  // The first second of the reference is the silence that was actually playing.
+  const firstSecond = reference.subarray(0, REFERENCE_RATE * 2);
+  assert.ok(firstSecond.every((byte) => byte === 0), "the silent second must be padded, not skipped");
+  assert.ok(reference.subarray(REFERENCE_RATE * 2).some((byte) => byte !== 0), "the played second must contain audio");
 });

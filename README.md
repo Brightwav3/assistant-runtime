@@ -5,7 +5,20 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Part of Assistant Mark I](https://img.shields.io/badge/Part%20of-Assistant%20Mark%20I-6f42c1)](https://github.com/Brightwav3/Assistant-mark-I)
 
-Headless, provider-independent composition runtime for the independent assistant cores.
+Headless composition runtime for the Gemini Live-based assistant.
+
+## Native-only runtime boundary
+
+The production runtime has one speech path: cleaned microphone PCM enters
+`realtime-core`, `GeminiLiveProvider` owns speech understanding and response
+audio, and this repository coordinates lifecycle, memory, tools, state, and
+echo cancellation around that session.
+
+The former local `Scribe Core → Intelligence Core → Voice Core` composition is
+retired and is deliberately not a runtime dependency. There is no active
+`modular` mode, local Whisper input-transcription hook, or local TTS fallback in
+this repository. Scribe Core and Voice Core remain independent sibling projects;
+they are not installed or built by this runtime's CI.
 
 ## Delegated voice intelligence
 
@@ -87,7 +100,7 @@ problem, but it is not a raw speech-recognition transcript.
 
 ## Public API
 
-`AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and State Core publication. `createAssistantRuntime()` composes configured activation, microphone, native realtime, SQLite memory, State Core, and safe read-only Host Tools components. The default realtime declarations are `get_time`, `calculate`, `uptime`, and `system_status`; callers can pass a `RealtimeToolExecutor` through `AssistantCompositionOptions` to replace that catalogue. Side-effecting tools such as `open_app` are not created by default.
+`AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and State Core publication. `createAssistantRuntime()` composes configured activation, microphone, Gemini Live realtime, SQLite memory, State Core, and safe read-only Host Tools components. The default realtime declarations are `get_time`, `calculate`, `uptime`, and `system_status`; callers can pass a `RealtimeToolExecutor` through `AssistantCompositionOptions` to replace that catalogue. Side-effecting tools such as `open_app` are not created by default.
 
 ## Echo cancellation
 
@@ -103,7 +116,7 @@ Activation keeps receiving raw capture — a double clap is not echo and must st
 
 ## Boundaries
 
-This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It does not implement echo cancellation either; it composes AEC System's public contract. It composes their public contracts and stores conversation episodes through Memory Core; when delegated extraction is enabled, semantic-memory candidates are proposed by the separately configured reasoning model and accepted or rejected by the memory pipeline. Raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
+This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It does not implement echo cancellation either; it composes AEC System's public contract. Gemini Live owns speech understanding and response audio; this runtime stores conversation episodes through Memory Core and routes tool calls through Tool System. When delegated extraction is enabled, semantic-memory candidates are proposed by the separately configured reasoning model and accepted or rejected by the memory pipeline. Raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
 
 ## Diagnostics
 

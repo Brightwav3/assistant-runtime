@@ -12,7 +12,6 @@ const base = (path: string): RuntimeSettings => ({
   inactivityMs: 1000,
   activation: { provider: "double_clap", sourceId: "test-microphone", minimumIntervalMs: 100, maximumIntervalMs: 700, amplitudeThreshold: 0.1 },
   realtime: { provider: "gemini", inputSampleRate: 16000, outputSampleRate: 24000 },
-  inputTranscription: { enabled: false, language: "cs" },
   memory: { enabled: true, path, scopeSubjectId: "test-user" },
   state: { enabled: true },
   echoCancellation: { enabled: false, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },

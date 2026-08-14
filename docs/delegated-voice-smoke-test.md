@@ -66,7 +66,6 @@ result rather than queue it.
 - `GEMINI_API_KEY` in the environment or `.env` beside the config. Never print it,
   never paste it into a trace, never commit it.
 - A working microphone and speaker. Echo cancellation settings as configured.
-- Local Whisper input transcription available, or `inputTranscription.enabled: false`.
 - `delegation.enabled: true`, with `delegation.model` set to an available text
   Gemini model with function calling. It must not equal `realtime.model` —
   they are two different roles.
@@ -103,8 +102,8 @@ Copy these from the trace, not from memory:
 - whether the transcript stream contains the delegation result. It must not. A
   result appearing as `transcript.final` with `source: "input"` is a defect, not a
   cosmetic issue;
-- whether Whisper transcribed the Czech prompt correctly, verbatim, including
-  where it did not.
+- whether Gemini Live understood the Czech prompt correctly, including any
+  wrong-script diagnostic transcript.
 
 ## Failure modes worth distinguishing
 

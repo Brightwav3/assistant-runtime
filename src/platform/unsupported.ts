@@ -13,6 +13,5 @@ export function createUnsupportedPlatformServices(id: PlatformId, reason: string
     capability: { status: "unsupported", reason },
     player: { executable: "", args: () => [] },
     createActivationListener: fail,
-    createSpeechStack: fail,
   };
 }

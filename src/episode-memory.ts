@@ -23,11 +23,11 @@ export interface HeardInput {
 }
 
 /**
- * Input transcription runs automatic per-session language detection that this model
- * exposes no knob for. Measured on real conversations: the first user turn of a session
- * is reliably mis-detected — Czech rendered phonetically as Spanish, French, or
- * Portuguese — and very short utterances stay wrong even later, while detection
- * converges once enough audio has accumulated.
+ * The Gemini Live provider exposes no input-language knob. Measured on real
+ * conversations: the first user turn of a session is reliably mis-detected — Czech
+ * rendered phonetically as Spanish, French, or Portuguese — and very short utterances
+ * stay wrong even later, while provider detection converges once enough audio has
+ * accumulated.
  *
  * The text is still stored, because a wrong transcript is evidence of what went wrong.
  * It is labelled so nothing downstream treats it as a faithful record.

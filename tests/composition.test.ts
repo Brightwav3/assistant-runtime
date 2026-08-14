@@ -65,12 +65,12 @@ test("heard debug mode adds only the opt-in recording tool", async () => {
   }
 });
 
-test("modular mode exposes a real Scribe/Intelligence/Voice capability boundary", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-modular-"));
-  const composition = await createAssistantRuntime({ ...settingsFor(join(directory, "memory.sqlite")), mode: "modular" }, undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });
+test("composition exposes only the native Gemini Live capability", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-native-only-"));
+  const composition = await createAssistantRuntime(settingsFor(join(directory, "memory.sqlite")), undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });
   try {
-    assert.equal(composition.runtime.capabilities().modular, true);
-    await composition.runtime.start();
-    assert.equal((await composition.components.find((component) => component.id === "modular")!.health()).state, "healthy");
+    assert.equal(composition.runtime.capabilities().nativeRealtime, true);
+    assert.equal("modular" in composition.runtime.capabilities(), false);
+    assert.equal(composition.components.some((component) => component.id === "modular"), false);
   } finally { await composition.runtime.stop(); await rm(directory, { recursive: true, force: true }); }
 });

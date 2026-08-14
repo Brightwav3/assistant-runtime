@@ -129,7 +129,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   async capabilities(): Promise<Record<string, unknown>> {
     const capabilities = await this.core.capabilities();
     const provider = capabilities.providers[0];
-    return { nativeAudio: provider.nativeAudio, inputTranscription: provider.inputTranscription, outputTranscription: provider.outputTranscription, interruption: provider.interruption, inputFormats: provider.inputFormats.map((format) => `${format.sampleRate}Hz/${format.channels}ch`) };
+    return { nativeAudio: provider.nativeAudio, inputTranscription: provider.inputTranscription, outputTranscription: provider.outputTranscription, interruption: provider.interruption, inputFormats: provider.inputFormats.map((format) => `${format.sampleRate}Hz/${format.channels}ch`), echoCancellation: this.echo?.describe() ?? null };
   }
 
   async start(): Promise<void> {}

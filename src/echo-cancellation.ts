@@ -141,6 +141,17 @@ export class EchoGuard {
     return this.usingGate ? gate : adaptive;
   }
 
+  /** What this guard is configured to do, readable before a session exists. */
+  describe(): Record<string, unknown> {
+    return {
+      processor: this.settings.processor,
+      tailMs: this.settings.tailMs,
+      minErleDb: this.settings.minErleDb,
+      preservesFullDuplex: this.settings.processor !== "gate",
+      recording: Boolean(this.settings.recordDir),
+    };
+  }
+
   metrics(): Record<string, unknown> {
     const adaptive = this.adaptive?.metrics();
     const gate = this.gate?.metrics();

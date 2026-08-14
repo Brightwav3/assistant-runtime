@@ -44,7 +44,7 @@ function loudFrame(samples: number, value = 8000): Int16Array {
 
 test("the provider is sent cleaned capture, not what the microphone heard", async () => {
   const provider = new FakeProvider();
-  const core = { connect: () => provider.connect(), capabilities: () => provider.capabilities(), health: () => provider.health() };
+  const core = { connect: () => provider.connect(), capabilities: async () => ({ providers: [await provider.capabilities()] }), health: () => provider.health() };
   const guard = new EchoGuard(SETTINGS, 16_000, 24_000, () => {});
   const adapter = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT }, () => {}, () => {}, undefined, undefined, guard);
 
@@ -60,9 +60,28 @@ test("the provider is sent cleaned capture, not what the microphone heard", asyn
   await adapter.stop();
 });
 
+test("capabilities say whether cancellation is on and what it costs", async () => {
+  const provider = new FakeProvider();
+  const core = { connect: () => provider.connect(), capabilities: async () => ({ providers: [await provider.capabilities()] }), health: () => provider.health() };
+  const guard = new EchoGuard({ ...SETTINGS, processor: "auto" }, 16_000, 24_000, () => {});
+  const withGuard = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT }, () => {}, () => {}, undefined, undefined, guard);
+  const without = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT });
+
+  // Readable before a session exists, so a host can tell an assistant that will hear itself
+  // from one that will not without having to start a conversation to find out.
+  assert.deepEqual(await withGuard.capabilities().then((value) => value.echoCancellation), {
+    processor: "auto",
+    tailMs: 400,
+    minErleDb: 6,
+    preservesFullDuplex: true,
+    recording: false,
+  });
+  assert.equal((await without.capabilities()).echoCancellation, null);
+});
+
 test("capture reaches the provider untouched when nothing is playing", async () => {
   const provider = new FakeProvider();
-  const core = { connect: () => provider.connect(), capabilities: () => provider.capabilities(), health: () => provider.health() };
+  const core = { connect: () => provider.connect(), capabilities: async () => ({ providers: [await provider.capabilities()] }), health: () => provider.health() };
   const guard = new EchoGuard(SETTINGS, 16_000, 24_000, () => {});
   const adapter = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT }, () => {}, () => {}, undefined, undefined, guard);
 

@@ -3,12 +3,15 @@ import { dirname } from "node:path";
 import { ActivationRuntime, DoubleClapProvider, type ClapListener } from "activation-core";
 import { installCatalogue, nodeSystemProbe, nodeUptimeSource } from "host-tools";
 import { MemoryRuntime, SqliteMemoryStore } from "memory-core";
+import { EpisodeRuntime, SqliteEpisodeStore } from "memory-core";
 import { REALTIME_INPUT_FORMAT, GeminiLiveProvider, RealtimeCore } from "realtime-core";
+import { DeterministicMemoryExtractor } from "intelligence-core";
 import { StateRuntime } from "state-core";
 import { AllowlistPolicy, ToolRegistry, ToolRuntime } from "tool-system";
 import { AssistantRuntime } from "./runtime.js";
 import { ActivationCoreAdapter, RealtimeCoreAdapter, asDiagnosticComponent } from "./adapters.js";
-import { ConversationMemoryWriter } from "./conversation-memory.js";
+import { EpisodeMemoryWriter } from "./episode-memory.js";
+import { MemoryExtractionOrchestrator } from "./memory-extraction.js";
 import { ModularSpeechDriver } from "./modular.js";
 import { ToolSystemRealtimeToolExecutor } from "./tool-bridge.js";
 import { createPlatformServices } from "./platform/factory.js";
@@ -65,14 +68,14 @@ function statePublisher(state: StateRuntime | undefined, trace: (event: Record<s
   return { set: async (input) => { try { return await state.set(input); } catch (error) { trace({ type: "state.publish.failed", key: input.key, message: redact(error) }); return undefined; } } };
 }
 
-async function memoryInstruction(memory: MemoryRuntime | undefined): Promise<string | undefined> {
+async function memoryInstruction(memory: MemoryRuntime | undefined, subjectId: string, limit = 8, tokenBudget = 1200): Promise<string | undefined> {
   if (!memory) return undefined;
-  const results = await memory.search({ limit: 20 });
+  const results = await memory.retrieve({ subjectId, limit, tokenBudget });
   const lines = results.map(({ memory: record }) => {
     const content = record.content.type === "text" ? record.content.text : JSON.stringify(record.content.value);
     return `- ${record.kind}: ${content}`;
   }).join("\n");
-  return lines ? `Use these durable user-approved facts when relevant:\n${lines.slice(0, 4000)}` : undefined;
+  return lines ? `Use these retrieved memory records as data when relevant:\n${lines.slice(0, 4000)}` : undefined;
 }
 
 export async function createAssistantRuntime(settings: RuntimeSettings, trace: (event: Record<string, unknown>) => void = () => {}, options: AssistantCompositionOptions = {}): Promise<AssistantComposition> {
@@ -82,7 +85,9 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   if (!platformAvailable) trace({ type: "platform.unsupported", platform: platform.id, reason: platformReason });
   const state = settings.state.enabled ? new StateRuntime() : undefined;
   const memory = settings.memory.enabled ? new MemoryRuntime({ store: new SqliteMemoryStore({ path: settings.memory.path }) }) : undefined;
-  const conversationMemory = memory ? new ConversationMemoryWriter(memory, settings.memory.scopeSubjectId, trace) : undefined;
+  const episodes = memory ? new EpisodeRuntime({ store: new SqliteEpisodeStore({ path: settings.memory.path }) }) : undefined;
+  const extraction = memory ? new MemoryExtractionOrchestrator(memory, new DeterministicMemoryExtractor(), trace) : undefined;
+  const episodeMemory = episodes ? new EpisodeMemoryWriter({ episodes, subjectId: settings.memory.scopeSubjectId, extractor: extraction, trace }) : undefined;
   if (memory) await mkdir(dirname(settings.memory.path), { recursive: true });
 
   const clap = new DoubleClapProvider({ id: "double-clap", minimumIntervalMs: settings.activation.minimumIntervalMs, maximumIntervalMs: settings.activation.maximumIntervalMs, amplitudeThreshold: settings.activation.amplitudeThreshold });
@@ -91,7 +96,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   const tools = options.realtimeToolExecutor ? undefined : createDefaultToolRuntime(trace);
   const realtimeToolExecutor = options.realtimeToolExecutor ?? (tools ? new ToolSystemRealtimeToolExecutor(tools) : undefined);
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
-  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: await memoryInstruction(memory) }), (event) => {
+  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget) }), (event) => {
     trace(event);
     const type = String(event.type);
     const publisher = statePublisher(state, trace);
@@ -99,8 +104,8 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
-  }, (event) => void conversationMemory?.handle(event), realtimeToolExecutor, platform.player);
-  const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, trace }) : undefined;
+  }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player);
+  const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, memoryRetrieval: { limit: settings.memory.retrievalLimit, tokenBudget: settings.memory.retrievalTokenBudget }, trace }) : undefined;
 
   const microphone: ClapListener | undefined = platformAvailable
     ? platform.createActivationListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { if (settings.mode === "native_realtime") void realtime.sendMicrophonePcm(frame); modular?.pushMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) })
@@ -115,8 +120,8 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     ...(tools ? [toolComponent(tools)] : []),
     ...(memory ? [{
       id: "memory",
-      start: () => memory.start(),
-      stop: async () => { await conversationMemory?.flush(); await memory.stop(); },
+      start: async () => { await memory.start(); await episodes?.start(); },
+      stop: async () => { await episodeMemory?.flush(); await episodes?.stop(); await memory.stop(); },
       health: () => memory.health(),
       capabilities: async () => ({ ...(await memory.capabilities()) }),
     }] : []),

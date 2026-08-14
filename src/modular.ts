@@ -1,6 +1,6 @@
 import { EnergyVad, ProviderRegistry, UtteranceSegmenter, VoicePipeline, VoiceSession, type AudioFrame, type AudioInput, type VoiceEvent } from "scribe-core";
 import { IntelligenceRuntime } from "intelligence-core";
-import { MemoryContextAdapter, type MemoryRuntime } from "memory-core";
+import type { MemoryRuntime } from "memory-core";
 import type { ModularDriver } from "./contracts.js";
 import type { PlatformSpeechStack } from "./platform/contracts.js";
 
@@ -28,18 +28,18 @@ export class ModularSpeechDriver implements ModularDriver {
   private readonly output: PlatformSpeechStack["output"];
   private readonly trace: (event: Record<string, unknown>) => void;
   private readonly memory?: MemoryRuntime;
-  private readonly memoryContext?: MemoryContextAdapter;
   private readonly memorySubjectId?: string;
+  private readonly memoryRetrieval?: { limit?: number; tokenBudget?: number };
   private latestText = "";
   private onActivity?: () => void;
 
-  constructor(options: { speech: PlatformSpeechStack; memory?: MemoryRuntime; memorySubjectId?: string; trace?: (event: Record<string, unknown>) => void }) {
+  constructor(options: { speech: PlatformSpeechStack; memory?: MemoryRuntime; memorySubjectId?: string; memoryRetrieval?: { limit?: number; tokenBudget?: number }; trace?: (event: Record<string, unknown>) => void }) {
     this.speech = options.speech;
     this.registry = new ProviderRegistry({ stt: options.speech.stt, tts: options.speech.tts, vadAvailable: true });
     this.output = options.speech.output;
     this.memory = options.memory;
-    this.memoryContext = options.memory ? new MemoryContextAdapter(options.memory) : undefined;
     this.memorySubjectId = options.memorySubjectId;
+    this.memoryRetrieval = options.memoryRetrieval;
     this.trace = options.trace ?? (() => {});
   }
   async start(): Promise<void> { await this.intelligence.start(); }
@@ -60,8 +60,7 @@ export class ModularSpeechDriver implements ModularDriver {
   pushMicrophonePcm(data: Int16Array): void { if (data.some((sample) => Math.abs(sample) / 32768 >= 0.02)) this.onActivity?.(); this.input.push({ streamId: "local-default-microphone", timestampMs: Date.now(), format: { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 100 }, data: data.slice() }); }
   private async respond(session: VoiceSession, interactionId: string, utteranceId: string): Promise<void> {
     try {
-      const context = this.memoryContext ? await this.memoryContext.contextFor(this.memorySubjectId ?? interactionId) : {};
-      const result = await this.intelligence.execute({ request_id: utteranceId, session_id: interactionId, input: { type: "text", text: this.latestText }, metadata: { memory: context } });
+      const result = await this.intelligence.execute({ request_id: utteranceId, session_id: interactionId, input: { type: "text", text: this.latestText }, ...(this.memory ? { memory_context: { subject_id: this.memorySubjectId ?? interactionId, ...(this.memoryRetrieval?.limit !== undefined ? { limit: this.memoryRetrieval.limit } : {}), ...(this.memoryRetrieval?.tokenBudget !== undefined ? { token_budget: this.memoryRetrieval.tokenBudget } : {}) } } : {}) });
       const text = result.outputs.find((output): output is { type: "text"; text: string } => output.type === "text")?.text;
       if (text) await session.submitResponse({ text, language: "en-US" });
     } catch (error) { this.trace({ type: "modular.error", message: error instanceof Error ? error.message : String(error) }); }

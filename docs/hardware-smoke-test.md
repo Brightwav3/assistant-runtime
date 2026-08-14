@@ -9,6 +9,10 @@ double clap → microphone → Gemini Live → speaker → memory survives a res
 Automated tests cover everything except the physical devices. This is the part
 CI can never run, so it is recorded here by hand.
 
+Running on open speakers rather than headphones needs echo cancellation, and
+that has its own procedure in
+[`docs/echo-cancellation-smoke-test.md`](./echo-cancellation-smoke-test.md).
+
 The explicit native realtime tool probe is documented separately in
 [`docs/realtime-tools-smoke-test.md`](./realtime-tools-smoke-test.md). It is
 not enabled by this general hardware path because it launches a process. The

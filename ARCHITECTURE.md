@@ -26,6 +26,43 @@ catalogue (`get_time`, `calculate`, `uptime`, `system_status`) through the same
 bridge. A caller-provided executor replaces that catalogue; side-effecting
 capabilities such as `open_app` remain explicit opt-ins.
 
+## Echo cancellation boundary
+
+```text
+provider output chunks -> PcmPlaybackController -> player
+                                              └-> EchoGuard.pushPlayback (reference)
+capture chunks -> frameizer -> EchoGuard.processCapture -> RealtimeSpeechSession
+```
+
+Both halves of the loop already passed through this repository, so composing AEC
+System costs two calls and no new device ownership. Three decisions are worth
+recording, because each was found by wiring it rather than by reasoning about it:
+
+**The reference is scheduled by playback position, not arrival time.** The
+provider streams a whole utterance in a burst and the player buffers it, so the
+moment a chunk arrives is not the moment it is heard. Stamping chunks with
+arrival time compresses the reference timeline against the capture timeline,
+which puts the echo outside the delay estimator's search window and opens the
+gate while the speaker is still talking. `EchoGuard` places each chunk at the end
+of the one before it.
+
+**An interruption retracts the reference.** Barge-in kills the player, and the
+audio still queued is never heard. Without `dropReferenceFrom` the canceller
+subtracts an echo that never arrives and the gate suppresses for the full
+duration of speech the user interrupted precisely because they did not want to
+hear it. That gap was added to AEC System's contract as a result.
+
+**Activation still receives raw capture.** Only the provider stream is cleaned. A
+double clap while the assistant is speaking is not echo, and gating it would make
+the assistant unable to be activated by someone standing next to a speaker.
+
+The fallback policy lives here rather than in AEC System, because choosing
+between full duplex and certainty is a product decision, not an audio one. The
+runtime holds both processors, uses the adaptive output while it reports a
+sustained echo return loss enhancement, and hands over to the gate when it does
+not — but only while the gate says playback is active, since with nothing playing
+there is no echo to trade the user's voice for.
+
 ## Platform boundary
 
 ```text

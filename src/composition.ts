@@ -10,6 +10,7 @@ import { StateRuntime } from "state-core";
 import { AllowlistPolicy, ToolRegistry, ToolRuntime } from "tool-system";
 import { AssistantRuntime } from "./runtime.js";
 import { ActivationCoreAdapter, RealtimeCoreAdapter, asDiagnosticComponent } from "./adapters.js";
+import { createEchoGuard } from "./echo-cancellation.js";
 import { EpisodeMemoryWriter } from "./episode-memory.js";
 import { MemoryExtractionOrchestrator } from "./memory-extraction.js";
 import { ModularSpeechDriver } from "./modular.js";
@@ -136,6 +137,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
         announceShutdown({ reason: request.reason });
       })
     : undefined);
+  const echo = createEchoGuard(settings.echoCancellation, settings.realtime.inputSampleRate, settings.realtime.outputSampleRate, trace);
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
   const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: systemInstruction(await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget)) }), (event) => {
     trace(event);
@@ -145,7 +147,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
-  }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player);
+  }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player, echo);
   const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, memoryRetrieval: { limit: settings.memory.retrievalLimit, tokenBudget: settings.memory.retrievalTokenBudget }, trace }) : undefined;
 
   const microphone: ClapListener | undefined = platformAvailable

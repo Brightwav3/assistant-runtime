@@ -10,6 +10,28 @@ export interface RuntimeSettings {
   realtime: { provider: "gemini"; model?: string; voice?: string; inputSampleRate: number; outputSampleRate: number };
   memory: { enabled: boolean; path: string; scopeSubjectId: string; retrievalLimit?: number; retrievalTokenBudget?: number; episodeRetentionDays?: number };
   state: { enabled: boolean };
+  echoCancellation: EchoCancellationSettings;
+}
+
+export interface EchoCancellationSettings {
+  enabled: boolean;
+  /**
+   * `adaptive` keeps full duplex and may degrade as the capture and playback clocks drift
+   * apart; `gate` is certain but costs the ability to interrupt by voice; `auto` runs the
+   * adaptive filter and falls back to the gate when it reports it is not cancelling.
+   */
+  processor: "adaptive" | "gate" | "auto";
+  /** Suppression tail after playback stops, covering output latency. Bluetooth runs 150-300 ms. */
+  tailMs: number;
+  /** Echo return loss enhancement, in dB, below which `auto` stops trusting the adaptive filter. */
+  minErleDb: number;
+  /** Consecutive healthy frames required before `auto` returns to the adaptive filter. */
+  recoveryFrames: number;
+  /**
+   * Where to write the played, captured, and cleaned streams for offline analysis. Off by
+   * default: it records the user's microphone to disk, which is not a default worth taking.
+   */
+  recordDir?: string;
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -56,6 +78,7 @@ const defaults: RuntimeSettings = {
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
+  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, minErleDb: 6, recoveryFrames: 25 },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -66,11 +89,18 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
     realtime: { ...defaults.realtime, ...(raw.realtime ?? {}) },
     memory: { ...defaults.memory, ...(raw.memory ?? {}) },
     state: { ...defaults.state, ...(raw.state ?? {}) },
+    echoCancellation: { ...defaults.echoCancellation, ...(raw.echoCancellation ?? {}) },
   };
   if (!settings.assistantId || !Number.isFinite(settings.inactivityMs) || settings.inactivityMs < 1) throw new Error("assistantId and a positive inactivityMs are required.");
   if (settings.mode !== "native_realtime" && settings.mode !== "modular") throw new Error("mode must be native_realtime or modular.");
   if (settings.memory.enabled && !settings.memory.path) throw new Error("memory.path is required when memory is enabled.");
   if (settings.memory.enabled && !isAbsolute(settings.memory.path)) settings.memory.path = resolve(basePath, settings.memory.path);
+  const echo = settings.echoCancellation;
+  if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "auto") throw new Error("echoCancellation.processor must be adaptive, gate, or auto.");
+  if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");
+  if (!Number.isFinite(echo.minErleDb)) throw new Error("echoCancellation.minErleDb must be a number.");
+  if (!Number.isInteger(echo.recoveryFrames) || echo.recoveryFrames < 1) throw new Error("echoCancellation.recoveryFrames must be a positive integer.");
+  if (echo.recordDir && !isAbsolute(echo.recordDir)) echo.recordDir = resolve(basePath, echo.recordDir);
   return settings;
 }
 

@@ -23,14 +23,15 @@
   },
   "dependencies": {
     "activation-core": "file:../activation-core",
-    "realtime-core": "file:../speech-system/realtime core",
-    "scribe-core": "file:../speech-system/scribe core",
-    "voice-core": "file:../speech-system/voice core",
+    "aec-system": "file:../aec-system",
+    "core-runtime": "file:../core-runtime",
+    "host-tools": "file:../host-tools",
     "intelligence-core": "file:../intelligence-core",
     "memory-core": "file:../memory-core",
-    "host-tools": "file:../host-tools",
+    "realtime-core": "file:../speech-system/realtime core",
+    "scribe-core": "file:../speech-system/scribe core",
     "state-core": "file:../state-core",
-    "core-runtime": "file:../core-runtime",
-    "tool-system": "file:../tool-system"
+    "tool-system": "file:../tool-system",
+    "voice-core": "file:../speech-system/voice core"
   }
 }

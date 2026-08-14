@@ -47,6 +47,32 @@ Host status after this pass, on the project's evidence scale:
 No macOS or Linux hardware was exercised in this pass. TypeScript compilation is
 not treated as evidence of platform support.
 
+## Echo cancellation — wired, not yet run on hardware
+
+Verified offline on 2026-08-14: `npm run verify` passed with **85 tests**
+(typecheck, tests, build), up from 82. The new coverage proves that what the
+provider receives is cleaned capture rather than what the microphone heard, that
+untouched capture still reaches it when nothing is playing, that the playback
+controller feeds the canceller exactly the samples it feeds the player, that the
+reference is scheduled by playback position rather than by arrival time, that an
+interrupted utterance retracts the rest of its schedule so the user is heard
+immediately, and that `auto` holds the gate until the adaptive filter has
+measurably converged and then returns to full duplex.
+
+Measured in that simulation, against a 200 ms echo path: the guard held the gate
+for the first 56 frames (1.1 s), returned to the adaptive filter once it
+converged, and ended at **74.5 dB** of echo return loss enhancement with no
+residual echo above the noise floor.
+
+**None of this has been near a speaker.** The procedure for the hardware run is
+[`docs/echo-cancellation-smoke-test.md`](./docs/echo-cancellation-smoke-test.md),
+and it is unrun. Until it happens the claim is that the wiring is correct, not
+that the assistant stops hearing itself.
+
+Integrating also found a gap in AEC System's contract — a host that aborts
+playback must be able to retract the reference it already pushed — which was
+fixed there rather than worked around here.
+
 ## Integration audit
 
 Activation, Intelligence, Memory, State, Speech, Tool System, and Host Tools

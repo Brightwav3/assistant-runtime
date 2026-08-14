@@ -30,9 +30,17 @@ stream. `start` runs until `SIGINT` or `SIGTERM`.
 
 `AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and State Core publication. `createAssistantRuntime()` composes configured activation, microphone, native realtime, SQLite memory, State Core, and safe read-only Host Tools components. The default realtime declarations are `get_time`, `calculate`, `uptime`, and `system_status`; callers can pass a `RealtimeToolExecutor` through `AssistantCompositionOptions` to replace that catalogue. Side-effecting tools such as `open_app` are not created by default.
 
+## Echo cancellation
+
+On open speakers the assistant hears itself, and the provider's voice activity detection cannot tell that voice from the user's — measured on 2026-08-14, it interrupted itself before a conversation could start. `echoCancellation` in `config.json` puts [AEC System](https://github.com/Brightwav3/aec-system) between the microphone and the provider: what the assistant plays becomes a reference, and what the provider receives is capture with that reference removed.
+
+`processor` is `auto` (adaptive cancellation, falling back to deterministic suppression whenever it is not measurably working), `adaptive` (full duplex always), or `gate` (certain, but no voice barge-in). `recordDir` writes the played, captured, and cleaned streams for offline analysis; it records the microphone, so it is off by default.
+
+Activation keeps receiving raw capture — a double clap is not echo and must still be heard while the assistant is speaking. The procedure for testing this on hardware is [`docs/echo-cancellation-smoke-test.md`](./docs/echo-cancellation-smoke-test.md); no run has happened yet.
+
 ## Boundaries
 
-This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It composes their public contracts and automatically stores compact input/output conversation summaries through Memory Core; raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
+This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It does not implement echo cancellation either; it composes AEC System's public contract. It composes their public contracts and automatically stores compact input/output conversation summaries through Memory Core; raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
 
 ## Diagnostics
 

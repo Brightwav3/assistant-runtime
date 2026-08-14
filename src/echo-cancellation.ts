@@ -1,0 +1,215 @@
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { AdaptiveEchoProcessor, GateEchoProcessor, resolveConfig, type AudioFrame, type EchoProcessor } from "aec-system";
+import type { EchoCancellationSettings } from "./config.js";
+
+/**
+ * Removes the assistant's own played audio from the microphone stream before it reaches
+ * the realtime provider.
+ *
+ * This exists because the provider's voice activity detection cannot tell the assistant's
+ * voice from the user's: measured on 2026-08-14, the assistant's greeting returned through
+ * the microphone, was transcribed as user speech, and the assistant interrupted itself
+ * before the conversation could start.
+ *
+ * Only the stream sent to the provider passes through here. Activation Core keeps receiving
+ * raw capture, because a double clap is not echo and must still be heard while the assistant
+ * is speaking.
+ */
+export class EchoGuard {
+  private readonly adaptive?: EchoProcessor;
+  private readonly gate?: EchoProcessor;
+  private readonly captureFormat: AudioFrame["format"];
+  private readonly referenceFormat: AudioFrame["format"];
+
+  /**
+   * Host-clock time one past the end of the audio queued for playback so far.
+   *
+   * The provider streams a whole utterance in a few hundred milliseconds, and the player
+   * buffers it — so the moment a chunk *arrives* is not the moment it is *heard*. Stamping
+   * the reference with arrival time would compress the reference timeline against the
+   * capture timeline, which puts the echo outside the delay estimator's search window and
+   * opens the gate while the speaker is still talking. Each chunk is therefore placed at
+   * the end of the one before it, which is where a player that does not underrun will play it.
+   */
+  private nextReferenceMs = 0;
+  /** Consecutive suppressing frames the adaptive filter has looked healthy for. */
+  private healthyStreak = 0;
+  private usingGate = false;
+  private framesProcessed = 0;
+  private recorders?: { reference: WriteStream; capture: WriteStream; cleaned: WriteStream };
+
+  constructor(
+    private readonly settings: EchoCancellationSettings,
+    private readonly captureSampleRate: number,
+    private readonly referenceSampleRate: number,
+    private readonly trace: (event: Record<string, unknown>) => void = () => {},
+    private readonly now: () => number = Date.now,
+  ) {
+    const config = resolveConfig({
+      captureFormat: { sampleRate: captureSampleRate },
+      gate: { tailMs: settings.tailMs },
+    });
+    // Both processors are constructed when the mode can use either, so a fallback is a
+    // decision rather than a cold start: the gate needs no convergence, but the adaptive
+    // filter cannot learn a path it was not fed while the gate was in charge.
+    if (settings.processor !== "gate") this.adaptive = new AdaptiveEchoProcessor(config);
+    if (settings.processor !== "adaptive") this.gate = new GateEchoProcessor(config);
+    this.usingGate = settings.processor === "gate";
+    this.captureFormat = { sampleRate: captureSampleRate, channels: 1, sampleFormat: "pcm_s16le" };
+    this.referenceFormat = { sampleRate: referenceSampleRate, channels: 1, sampleFormat: "pcm_s16le" };
+  }
+
+  /** A new utterance is starting. Any audio still queued from the last one is gone. */
+  playbackStarted(): void {
+    this.nextReferenceMs = 0;
+  }
+
+  /**
+   * Playback was aborted, so the queued audio will never be heard. Dropping the schedule
+   * matters most for the gate: without it, suppression would continue for the full duration
+   * of audio the user was interrupted out of hearing.
+   */
+  playbackStopped(): void {
+    // The processors were handed audio that will never leave the speaker. Retract it, or
+    // the gate suppresses and the filter subtracts for the whole duration of an utterance
+    // the user interrupted precisely because they did not want to hear it.
+    const at = this.now();
+    this.adaptive?.dropReferenceFrom(at);
+    this.gate?.dropReferenceFrom(at);
+    this.nextReferenceMs = 0;
+  }
+
+  /** What the assistant is about to play. */
+  pushPlayback(data: Int16Array): void {
+    if (data.length === 0) return;
+    const startMs = Math.max(this.now(), this.nextReferenceMs);
+    this.nextReferenceMs = startMs + (data.length / this.referenceSampleRate) * 1000;
+    const frame: AudioFrame = { streamId: "assistant-playback", timestampMs: startMs, format: this.referenceFormat, data };
+    this.adaptive?.pushReference(frame);
+    this.gate?.pushReference(frame);
+    this.recorders?.reference.write(pcmBytes(data));
+  }
+
+  /** What the microphone heard. Returns what the provider should be given instead. */
+  processCapture(data: Int16Array): Int16Array {
+    const frame: AudioFrame = { streamId: "local-capture", timestampMs: this.now(), format: this.captureFormat, data };
+    const adaptive = this.adaptive?.process(frame);
+    const gate = this.gate?.process(frame);
+    this.framesProcessed += 1;
+
+    const cleaned = this.choose(adaptive?.data, gate?.data) ?? data;
+    if (this.recorders) {
+      this.recorders.capture.write(pcmBytes(data));
+      this.recorders.cleaned.write(pcmBytes(cleaned));
+    }
+    if (this.framesProcessed % 50 === 0) this.trace({ type: "echo.metrics", timestampMs: this.now(), ...this.metrics() });
+    return cleaned;
+  }
+
+  /**
+   * Full duplex whenever cancellation is actually working, suppression when it is not.
+   *
+   * The decision is only ever made while the gate says playback is active — with nothing
+   * playing there is no echo, so there is nothing to trade the user's voice for. Returning
+   * to the adaptive output needs a sustained healthy reading rather than a single frame,
+   * because one good block during a pause in the assistant's speech is not convergence.
+   */
+  private choose(adaptive: Int16Array | undefined, gate: Int16Array | undefined): Int16Array | undefined {
+    if (!gate) return adaptive;
+    if (!adaptive) return gate;
+
+    const gateMetrics = this.gate!.metrics();
+    if (!gateMetrics.gateSuppressing) {
+      this.usingGate = false;
+      return adaptive;
+    }
+
+    const metrics = this.adaptive!.metrics();
+    const healthy = metrics.state === "converged" && metrics.erleDb >= this.settings.minErleDb;
+    this.healthyStreak = healthy ? this.healthyStreak + 1 : 0;
+    const wasUsingGate = this.usingGate;
+    this.usingGate = wasUsingGate ? this.healthyStreak < this.settings.recoveryFrames : !healthy;
+    if (this.usingGate !== wasUsingGate) {
+      this.trace({
+        type: this.usingGate ? "echo.fallback.gate" : "echo.fallback.adaptive",
+        timestampMs: this.now(),
+        erleDb: Number(metrics.erleDb.toFixed(1)),
+        state: metrics.state,
+      });
+    }
+    return this.usingGate ? gate : adaptive;
+  }
+
+  metrics(): Record<string, unknown> {
+    const adaptive = this.adaptive?.metrics();
+    const gate = this.gate?.metrics();
+    return {
+      processor: this.usingGate ? "gate" : (this.adaptive?.id ?? "gate"),
+      framesProcessed: this.framesProcessed,
+      erleDb: adaptive ? Number(adaptive.erleDb.toFixed(1)) : null,
+      state: adaptive?.state ?? gate?.state ?? null,
+      estimatedDelayMs: adaptive?.estimatedDelayMs === undefined || adaptive?.estimatedDelayMs === null ? null : Number(adaptive.estimatedDelayMs.toFixed(1)),
+      delayConverged: adaptive?.delayConverged ?? false,
+      doubleTalkBlocks: adaptive?.doubleTalkBlocks ?? 0,
+      divergenceEvents: adaptive?.divergenceEvents ?? 0,
+      gateSuppressing: gate?.gateSuppressing ?? false,
+      framesSuppressed: gate?.framesSuppressed ?? 0,
+    };
+  }
+
+  /**
+   * Starts writing the three streams to headerless pcm_s16le files, so a session that
+   * still goes wrong leaves evidence instead of an impression. Recording is opt-in: it
+   * writes the user's microphone audio to disk, which is not something to do by default.
+   */
+  beginSession(sessionId: string): void {
+    this.reset();
+    if (this.settings.recordDir) this.startRecording(this.settings.recordDir, sessionId);
+  }
+
+  startRecording(directory: string, sessionId: string, basePath = process.cwd()): void {
+    void this.close();
+    const target = isAbsolute(directory) ? directory : resolve(basePath, directory);
+    mkdirSync(target, { recursive: true });
+    const path = (name: string) => resolve(target, `${sessionId}.${name}.pcm`);
+    this.recorders = {
+      reference: createWriteStream(path(`reference-${this.referenceSampleRate}`)),
+      capture: createWriteStream(path(`capture-${this.captureSampleRate}`)),
+      cleaned: createWriteStream(path(`cleaned-${this.captureSampleRate}`)),
+    };
+    this.trace({ type: "echo.recording.started", timestampMs: this.now(), directory: target, sessionId });
+  }
+
+  /** Resolves once the recordings are on disk, so a caller can read what a session produced. */
+  async close(): Promise<void> {
+    if (!this.recorders) return;
+    const streams = Object.values(this.recorders);
+    this.recorders = undefined;
+    this.trace({ type: "echo.recording.stopped", timestampMs: this.now(), ...this.metrics() });
+    await Promise.all(streams.map((stream) => new Promise<void>((done) => stream.end(done))));
+  }
+
+  reset(): void {
+    this.adaptive?.reset();
+    this.gate?.reset();
+    this.nextReferenceMs = 0;
+    this.healthyStreak = 0;
+    this.framesProcessed = 0;
+    this.usingGate = this.settings.processor === "gate";
+  }
+}
+
+function pcmBytes(data: Int16Array): Buffer {
+  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+}
+
+export function createEchoGuard(
+  settings: EchoCancellationSettings,
+  captureSampleRate: number,
+  referenceSampleRate: number,
+  trace: (event: Record<string, unknown>) => void,
+): EchoGuard | undefined {
+  if (!settings.enabled) return undefined;
+  return new EchoGuard(settings, captureSampleRate, referenceSampleRate, trace);
+}

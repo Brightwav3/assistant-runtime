@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RealtimeToolExecutor, RuntimeComponent } from "./contracts.js";
 import type { PcmPlayerSpec } from "./platform/contracts.js";
 import { PcmInputFrameizer, REALTIME_MICROPHONE_STREAM_ID } from "./realtime-audio.js";
+import type { EchoGuard } from "./echo-cancellation.js";
 
 /** Adapts Activation Core's async event stream without importing its internals. */
 export class ActivationCoreAdapter implements ActivationSource {
@@ -27,19 +28,28 @@ export class ActivationCoreAdapter implements ActivationSource {
  */
 export { WINDOWS_PCM_PLAYER as PCM_PLAYER } from "./platform/windows-player.js";
 
+/** Any sample above this counts as someone speaking rather than room noise. */
+function hasSpeechLevel(data: Int16Array): boolean {
+  return data.some((sample) => Math.abs(sample) / 32768 >= 0.02);
+}
+
 /** Matches the provider's documented "stream paused for more than a second" rule. */
 const CAPTURE_IDLE_FLUSH_MS = 1_000;
 
 export interface PcmPlaybackSink { write(chunk: Buffer): void; end(): void; abort(): void; }
 
+/** What the echo canceller needs from playback: the audio, and when it stops being true. */
+export interface PlaybackReferenceSink { playbackStarted(): void; pushPlayback(data: Int16Array): void; playbackStopped(): void; }
+
 export class PcmPlaybackController {
   private sink?: PcmPlaybackSink;
   private outputId?: string;
-  constructor(private readonly factory: () => PcmPlaybackSink) {}
+  /** Fed exactly what the player is fed, so the echo canceller's reference is the played audio and not an approximation of it. */
+  constructor(private readonly factory: () => PcmPlaybackSink, private readonly reference?: PlaybackReferenceSink) {}
   handle(event: RealtimeSpeechEvent): void {
-    if (event.type === "output.audio_started") { this.sink?.abort(); this.sink = this.factory(); this.outputId = event.outputId; return; }
-    if (event.type === "output.audio_chunk") { if (this.sink && this.outputId === event.outputId) this.sink.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength)); return; }
-    if (event.type === "output.interrupted") { if (!event.outputId || event.outputId === this.outputId) { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; } return; }
+    if (event.type === "output.audio_started") { this.sink?.abort(); this.sink = this.factory(); this.outputId = event.outputId; this.reference?.playbackStarted(); return; }
+    if (event.type === "output.audio_chunk") { if (this.sink && this.outputId === event.outputId) { this.sink.write(Buffer.from(event.frame.data.buffer, event.frame.data.byteOffset, event.frame.data.byteLength)); this.reference?.pushPlayback(event.frame.data); } return; }
+    if (event.type === "output.interrupted") { if (!event.outputId || event.outputId === this.outputId) { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; this.reference?.playbackStopped(); } return; }
     if (event.type === "output.audio_completed" && event.outputId === this.outputId) { this.sink?.end(); this.sink = undefined; this.outputId = undefined; }
   }
   close(): void { this.sink?.end(); this.sink = undefined; this.outputId = undefined; }
@@ -107,6 +117,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     private readonly toolExecutor?: RealtimeToolExecutor,
     /** Playback spec from the platform leaf. Omitted means no playback on this host — never a Windows fallback. */
     private readonly player?: PcmPlayerSpec,
+    /** Removes the assistant's own voice from capture before the provider hears it. Omitted means no cancellation. */
+    private readonly echo?: EchoGuard,
   ) {}
 
   async health(): Promise<ComponentHealth> {
@@ -124,6 +136,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
 
   async stop(): Promise<void> {
     this.clearCaptureIdleFlush();
+    await this.echo?.close();
     await this.active?.close();
     this.active = undefined;
     this.opening = false;
@@ -174,7 +187,10 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.trace({ type: "realtime.connect.succeeded", timestampMs: Date.now(), sessionId: session.id });
     await this.enqueueFrames(session, this.pendingFrames.splice(0));
 
-    const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace, this.player));
+    this.echo?.beginSession(session.id);
+    // `output.audio_completed` deliberately does not stop the reference schedule: the last
+    // chunk has been handed to the player, not yet heard. The suppression tail covers it.
+    const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace, this.player), this.echo);
     let chunks = 0;
     let bytesWritten = 0;
     let firstChunkAt: number | undefined;
@@ -258,8 +274,11 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       return;
     }
 
-    if (data.some((sample) => Math.abs(sample) / 32768 >= 0.02)) this.onActivity?.();
-    const frames = this.frameizer.push(data);
+    const captured = this.frameizer.push(data);
+    // Echo cancellation runs before the activity test as well as before the provider, so the
+    // assistant's own voice cannot keep its own inactivity timeout alive.
+    const frames = this.echo ? captured.map((frame) => this.echo!.processCapture(frame)) : captured;
+    if (this.echo ? frames.some(hasSpeechLevel) : hasSpeechLevel(data)) this.onActivity?.();
     if (frames.length === 0) return;
 
     if (!session) {

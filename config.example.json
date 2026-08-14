@@ -23,5 +23,12 @@
   },
   "state": {
     "enabled": true
+  },
+  "echoCancellation": {
+    "enabled": true,
+    "processor": "auto",
+    "tailMs": 400,
+    "minErleDb": 6,
+    "recoveryFrames": 25
   }
 }

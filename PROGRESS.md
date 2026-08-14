@@ -142,3 +142,39 @@ The modular end-to-end check still requires a local microphone, speaker,
 `ffplay.exe`, and `GEMINI_API_KEY`. It is not represented as a passing
 automated test because those external resources are not deterministic in the
 offline suite.
+
+## Delegated voice intelligence (Mark II)
+
+The voice model can now hand deeper work to a separately configured text model and
+keep talking while it runs. Delegation is **opt-in** (`delegation.enabled`, default
+`false`); nothing below changes the existing default runtime.
+
+What is verified, and by what:
+
+- Provider-neutral delegation contracts, capability negotiation, and the degraded
+  fallback — `speech-system/realtime core`, offline fake providers. VERIFIED.
+- Bounded delegated recall: active user scope, result and byte ceilings enforced in
+  Memory Core rather than at the tool boundary, forgotten/superseded/expired records
+  excluded, provenance and confidence preserved — `memory-core`. VERIFIED.
+- Immediate acceptance with correlation, deadlines, and cancellation —
+  `intelligence-core`. VERIFIED.
+- Provider-neutral usage metering: one record per physical provider call, retries
+  counted separately from logical calls, unknown usage kept unknown, versioned price
+  catalog, and a fail-closed unknown-cost policy. VERIFIED.
+- Broker lifecycle, delivery scheduling (`interrupt`/`when_idle`/`silent`), late-result
+  policy, reconnect drain, bounded queue, and clean shutdown. VERIFIED.
+- The MIT / Mars / submarine disambiguation end to end, with no API key, microphone,
+  network, or generated audio. VERIFIED offline.
+- Gemini active-session context injection via `sendClientContent` — VERIFIED against
+  the `@google/genai` 1.52.0 contract, **not** against a live session.
+
+What is deliberately still unverified:
+
+- Gemini live tool calling is claimed as `blocking` and native result scheduling as
+  `false`. Both are UNVERIFIED against a real session and are under-claimed on
+  purpose: over-claiming async would make the runtime skip its degraded path and drop
+  a result instead of queueing it.
+- Czech recognition of the robot prompt, real speaker delivery, and end-to-end latency
+  remain hardware-unverified. The procedure is in
+  [the delegated voice smoke test](./docs/delegated-voice-smoke-test.md); a green
+  fake-provider suite is not evidence for any of it.

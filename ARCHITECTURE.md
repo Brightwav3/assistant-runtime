@@ -115,3 +115,45 @@ Making `createPlatformServices()` async to enable lazy loading would change a
 public contract and ripple through composition and tests, for no measured gain.
 The real prerequisite is confirming that `decibri` imports at all on macOS and
 Linux, which needs hardware this project does not have.
+
+## Delegated voice intelligence
+
+Two model roles, configured independently, inside one conversation.
+
+```text
+voice model                     delegation model
+  intelligence_delegate           memory_search, memory_view, host tools
+  (and nothing else)              (never intelligence_delegate)
+        |                                   ^
+        v                                   |
+  Delegation Broker  ---> Intelligence Core -+
+        |                       |
+        |                  Tool System ---> Memory Core
+        v
+  Delivery Scheduler ---> the same realtime session
+        interrupt / when_idle / silent
+```
+
+Why it is shaped this way:
+
+- **The acknowledgement must be true when it is spoken.** The broker mints an
+  execution identity and returns before any model runs, so the voice model has a real
+  thing to acknowledge and correlate against instead of stalling or inventing an
+  answer. `intelligence_delegate` returns a Tool System continuation and never awaits
+  a result.
+- **A background result is not user speech.** It returns as a `RealtimeContextEvent`
+  with `source: "delegation"`, never as a transcript. Where a provider cannot inject
+  context natively, the degraded path announces itself first, so a trace can always
+  tell the two apart.
+- **Neither model can widen its own reach.** The voice model gets one tool; the
+  delegated model gets the downstream catalogue but not `intelligence_delegate`, which
+  would let it delegate to itself. Every bound is enforced inside Memory Core as well
+  as in the declaration, because the declaration is something a model can see and a
+  model is a requester, not an authority.
+- **Roles are separate settings.** `delegation.model` is never derived from
+  `realtime.model`. Tying them together would mean a voice upgrade silently changes
+  what does the reasoning.
+- **Spend is measurable before it is surprising.** Every physical provider call —
+  voice, text, retries, failures that still consumed tokens — emits one normalized
+  usage record. Missing provider usage stays unknown rather than becoming zero, and an
+  unpriced call follows an explicit policy that is fail-closed by default.

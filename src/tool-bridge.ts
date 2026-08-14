@@ -81,6 +81,38 @@ function toExecutionArguments(args: Record<string, unknown>): ExecutionArguments
   return converted;
 }
 
+/** Result bytes a realtime provider is told to expect. Bounds the surface, not the tool's own output. */
+const REALTIME_MAX_RESULT_BYTES = 8_000;
+
+/**
+ * Derives the provider-facing metadata from what Tool System already declares.
+ *
+ * Nothing here is invented: version, side effect and timeout come from the declaration
+ * itself, so the two descriptions cannot drift apart. Risk is the one judgement, and it
+ * is derived from the side-effect class rather than configured separately — a second
+ * place to say "this is low risk" is a second place to be wrong.
+ */
+function toRealtimeMetadata(declaration: ToolDeclaration): RealtimeToolDeclaration["metadata"] {
+  const risk = declaration.sideEffect === "read_only"
+    ? "low"
+    : declaration.sideEffect === "process_launch" || declaration.sideEffect === "network"
+      ? "high"
+      : "medium";
+  return {
+    version: declaration.version,
+    sideEffect: declaration.sideEffect === "read_only" ? "read_only" : "mutating",
+    risk,
+    // Every Tool System call is blocking from the provider's point of view. Work that
+    // outlives the call says so with a continuation outcome, not with this flag.
+    execution: "blocking",
+    timeoutMs: declaration.guards.timeoutMs,
+    cancellable: true,
+    maxResultBytes: REALTIME_MAX_RESULT_BYTES,
+    owner: "tool-system",
+    auditCategory: `tool.${declaration.name}`,
+  };
+}
+
 export class ToolSystemToolClient implements ToolClient {
   constructor(private readonly runtime: ToolRuntime) {}
 
@@ -118,6 +150,7 @@ export class ToolSystemRealtimeToolExecutor implements RealtimeToolExecutor {
       name: declaration.name,
       description: declaration.description,
       inputSchema: toRealtimeInputSchema(declaration),
+      metadata: toRealtimeMetadata(declaration),
     }));
   }
 

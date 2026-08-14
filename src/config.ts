@@ -8,9 +8,43 @@ export interface RuntimeSettings {
   inactivityMs: number;
   activation: { provider: "double_clap"; sourceId: string; device?: string; minimumIntervalMs: number; maximumIntervalMs: number; amplitudeThreshold: number };
   realtime: { provider: "gemini"; model?: string; voice?: string; inputSampleRate: number; outputSampleRate: number };
+  inputTranscription: { enabled: boolean; language: string; cliPath?: string; modelPath?: string; threads?: number };
   memory: { enabled: boolean; path: string; scopeSubjectId: string; retrievalLimit?: number; retrievalTokenBudget?: number; episodeRetentionDays?: number };
   state: { enabled: boolean };
   echoCancellation: EchoCancellationSettings;
+  delegation: DelegationSettings;
+  usage: UsageSettings;
+}
+
+/**
+ * The delegation model is configured independently of the voice model and is never
+ * derived from it. They are two different jobs: one keeps a conversation alive, the
+ * other reasons. Tying them together would mean a voice upgrade silently changes what
+ * does the thinking.
+ */
+export interface DelegationSettings {
+  enabled: boolean;
+  provider: "gemini";
+  model: string;
+  /** Tried in this order. Deterministic on purpose: a random pick makes a failure irreproducible. */
+  fallbackModels: string[];
+  deadlineMs: number;
+  maximumModelCalls: number;
+  maximumToolCalls: number;
+  cancelOnSessionClose: boolean;
+  defaultDelivery: "interrupt" | "when_idle" | "silent";
+  lateResultPolicy: "queue" | "drop" | "persist";
+}
+
+export interface UsageSettings {
+  enabled: boolean;
+  /** Append-only operational records. Runtime state, never committed. */
+  path: string;
+  maxRecords: number;
+  /** What to do when the next call has no matching price. Fail-closed by default. */
+  unknownCostPolicy: "allow" | "warn" | "block";
+  priceCatalogVersion: string;
+  maximumCost?: number;
 }
 
 export interface EchoCancellationSettings {
@@ -110,9 +144,25 @@ const defaults: RuntimeSettings = {
   inactivityMs: 30_000,
   activation: { provider: "double_clap", sourceId: "local-default-microphone", minimumIntervalMs: 150, maximumIntervalMs: 700, amplitudeThreshold: 0.18 },
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
+  inputTranscription: { enabled: true, language: "cs" },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
   echoCancellation: { enabled: true, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 2, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
+  delegation: {
+    enabled: false,
+    provider: "gemini",
+    model: "gemini-2.5-flash",
+    fallbackModels: [],
+    deadlineMs: 45_000,
+    maximumModelCalls: 6,
+    maximumToolCalls: 12,
+    cancelOnSessionClose: true,
+    // The conversation is half duplex: cutting the assistant off mid-sentence to
+    // announce a background finding is worse than waiting for the next gap.
+    defaultDelivery: "when_idle",
+    lateResultPolicy: "queue",
+  },
+  usage: { enabled: true, path: "..\\.runtime\\usage.jsonl", maxRecords: 10_000, unknownCostPolicy: "block", priceCatalogVersion: "unset" },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -121,9 +171,12 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
     ...raw,
     activation: { ...defaults.activation, ...(raw.activation ?? {}) },
     realtime: { ...defaults.realtime, ...(raw.realtime ?? {}) },
+    inputTranscription: { ...defaults.inputTranscription, ...(raw.inputTranscription ?? {}) },
     memory: { ...defaults.memory, ...(raw.memory ?? {}) },
     state: { ...defaults.state, ...(raw.state ?? {}) },
     echoCancellation: { ...defaults.echoCancellation, ...(raw.echoCancellation ?? {}) },
+    delegation: { ...defaults.delegation, ...(raw.delegation ?? {}) },
+    usage: { ...defaults.usage, ...(raw.usage ?? {}) },
   };
   if (!settings.assistantId || !Number.isFinite(settings.inactivityMs) || settings.inactivityMs < 1) throw new Error("assistantId and a positive inactivityMs are required.");
   if (settings.mode !== "native_realtime" && settings.mode !== "modular") throw new Error("mode must be native_realtime or modular.");
@@ -139,6 +192,27 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   if (!Number.isFinite(echo.minErleDb)) throw new Error("echoCancellation.minErleDb must be a number.");
   if (!Number.isInteger(echo.recoveryFrames) || echo.recoveryFrames < 1) throw new Error("echoCancellation.recoveryFrames must be a positive integer.");
   if (echo.recordDir && !isAbsolute(echo.recordDir)) echo.recordDir = resolve(basePath, echo.recordDir);
+
+  const delegation = settings.delegation;
+  if (delegation.provider !== "gemini") throw new Error("delegation.provider must be gemini.");
+  if (delegation.enabled && !delegation.model.trim()) throw new Error("delegation.model is required when delegation is enabled.");
+  if (!Array.isArray(delegation.fallbackModels) || delegation.fallbackModels.some((model) => typeof model !== "string" || !model.trim())) {
+    throw new Error("delegation.fallbackModels must be an ordered list of model names.");
+  }
+  if (delegation.fallbackModels.includes(delegation.model)) throw new Error("delegation.fallbackModels must not repeat delegation.model.");
+  if (!Number.isFinite(delegation.deadlineMs) || delegation.deadlineMs <= 0) throw new Error("delegation.deadlineMs must be greater than zero.");
+  if (!Number.isInteger(delegation.maximumModelCalls) || delegation.maximumModelCalls < 1) throw new Error("delegation.maximumModelCalls must be a positive integer.");
+  if (!Number.isInteger(delegation.maximumToolCalls) || delegation.maximumToolCalls < 1) throw new Error("delegation.maximumToolCalls must be a positive integer.");
+  if (!["interrupt", "when_idle", "silent"].includes(delegation.defaultDelivery)) throw new Error("delegation.defaultDelivery must be interrupt, when_idle, or silent.");
+  if (!["queue", "drop", "persist"].includes(delegation.lateResultPolicy)) throw new Error("delegation.lateResultPolicy must be queue, drop, or persist.");
+
+  const usage = settings.usage;
+  if (!["allow", "warn", "block"].includes(usage.unknownCostPolicy)) throw new Error("usage.unknownCostPolicy must be allow, warn, or block.");
+  if (!Number.isInteger(usage.maxRecords) || usage.maxRecords < 1) throw new Error("usage.maxRecords must be a positive integer.");
+  if (usage.maximumCost !== undefined && (!Number.isFinite(usage.maximumCost) || usage.maximumCost < 0)) throw new Error("usage.maximumCost must be zero or more.");
+  if (usage.enabled && !usage.path) throw new Error("usage.path is required when usage metering is enabled.");
+  if (usage.enabled && !isAbsolute(usage.path)) usage.path = resolve(basePath, usage.path);
+
   return settings;
 }
 

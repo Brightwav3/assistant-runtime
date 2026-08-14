@@ -20,6 +20,33 @@ Verified on real hardware on 2026-08-13: Gemini discovered `calculate`,
 multi-step calculation requests and spoke the results in Czech. The same run
 confirmed activation, barge-in, memory, and clean session shutdown.
 
+Verified offline on 2026-08-14: the platform boundary carries no Windows-only
+defaults. `npm run verify` passed with 54 tests in this repository (typecheck,
+tests, build). The new coverage proves the shared realtime stream id and the
+shipped activation `sourceId` name no operating system, that
+`ASSISTANT_CONFIG` → `JARVIS_CONFIG` → `config.json` precedence holds including
+for blank variables, that `verifyPlayback` refuses without a player instead of
+probing `ffplay.exe`, that an `unsupported` host exposes an empty player and
+advertises no `ffplay` anywhere in its component capabilities, and that
+composition on such a host starts and stops without throwing.
+
+Import behaviour was measured on this host, not assumed: importing
+`src/composition.js` and `activation-core` both succeed, and the `decibri`
+capture binding loads eagerly through `activation-core` regardless of which
+platform leaf is selected. Lazy-loading the Windows leaf was therefore
+deliberately not implemented — see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+Host status after this pass, on the project's evidence scale:
+
+| Host | Status |
+| --- | --- |
+| Windows (win32) | VERIFIED — source, deterministic tests, and the prior real-hardware runs |
+| macOS (darwin) | MISSING adapter / UNVERIFIED hardware |
+| Linux | MISSING adapter / UNVERIFIED hardware |
+
+No macOS or Linux hardware was exercised in this pass. TypeScript compilation is
+not treated as evidence of platform support.
+
 ## Integration audit
 
 Activation, Intelligence, Memory, State, Speech, Tool System, and Host Tools

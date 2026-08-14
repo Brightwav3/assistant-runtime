@@ -1,4 +1,6 @@
-export const REALTIME_MICROPHONE_STREAM_ID = "windows-default-microphone";
+/** Logical identity of the host capture stream. Platform-neutral by contract: the
+ *  concrete device name belongs to the selected platform leaf, not to shared code. */
+export const REALTIME_MICROPHONE_STREAM_ID = "local-default-microphone";
 export const REALTIME_INPUT_FRAME_SAMPLES = 320;
 
 /** Converts arbitrary capture chunks into copied, complete realtime PCM frames. */

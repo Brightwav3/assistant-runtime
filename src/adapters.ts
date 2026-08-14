@@ -20,12 +20,12 @@ export class ActivationCoreAdapter implements ActivationSource {
   private emit(event: ActivationEvent): void { const activation = { activationId: event.activationId, timestamp: event.timestamp, source: event.sourceId }; this.onDetected?.(activation); for (const handler of this.handlers) handler(activation); }
 }
 
-/** Single source of truth for playback invocation: preflight, tests, and streaming all use these exact arguments. */
-export const PCM_PLAYER = {
-  executable: "ffplay.exe",
-  /** ffplay 8 removed the -ar/-ac shorthands; the raw PCM demuxer options are -sample_rate/-ch_layout. */
-  args: (sampleRate: number): string[] => ["-nodisp", "-autoexit", "-loglevel", "error", "-f", "s16le", "-sample_rate", String(sampleRate), "-ch_layout", "mono", "-i", "pipe:0"],
-};
+/**
+ * @deprecated Shared code must take a `PcmPlayerSpec` from the selected platform
+ * leaf instead of reaching for the Windows player. Re-exported only so existing
+ * callers keep resolving; nothing in this module defaults to it.
+ */
+export { WINDOWS_PCM_PLAYER as PCM_PLAYER } from "./platform/windows-player.js";
 
 export interface PcmPlaybackSink { write(chunk: Buffer): void; end(): void; abort(): void; }
 
@@ -43,7 +43,14 @@ export class PcmPlaybackController {
   abort(): void { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; }
 }
 
-function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unknown>) => void, player: PcmPlayerSpec = PCM_PLAYER): PcmPlaybackSink {
+/** Discards audio and says so. Used when no platform leaf supplied a player. */
+function unavailablePcmPlayback(reason: string, trace: (event: Record<string, unknown>) => void): PcmPlaybackSink {
+  trace({ type: "playback.unavailable", timestampMs: Date.now(), reason });
+  return { write: () => undefined, end: () => undefined, abort: () => undefined };
+}
+
+function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unknown>) => void, player: PcmPlayerSpec | undefined): PcmPlaybackSink {
+  if (!player?.executable) return unavailablePcmPlayback("No platform leaf supplied a PCM player for this host.", trace);
   const child = spawn(player.executable, player.args(sampleRate), { stdio: "pipe", windowsHide: true });
   let intentionallyAborted = false;
   trace({ type: "playback.spawned", timestampMs: Date.now(), pid: child.pid ?? null });
@@ -54,15 +61,20 @@ function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unkn
   return { write: (chunk) => { if (child.stdin.writable) child.stdin.write(chunk); }, end: () => { if (child.stdin.writable) child.stdin.end(); }, abort: () => { intentionallyAborted = true; child.stdin.destroy(); child.kill(); } };
 }
 
-/** Preflight: proves the installed player accepts the production arguments before a user ever activates. */
-export async function verifyPlayback(sampleRate = 24_000): Promise<{ ok: boolean; message?: string }> {
+/**
+ * Preflight: proves the selected platform's player accepts the production
+ * arguments before a user ever activates. The player is supplied by the caller
+ * so no host is probed with another host's executable.
+ */
+export async function verifyPlayback(player: PcmPlayerSpec | undefined, sampleRate = 24_000): Promise<{ ok: boolean; message?: string }> {
+  if (!player?.executable) return { ok: false, message: "No platform leaf supplied a PCM player for this host, so playback cannot be verified." };
   return new Promise((resolve) => {
-    const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(sampleRate), { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+    const child = spawn(player.executable, player.args(sampleRate), { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
     let stderr = "";
     child.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
     child.stdin.on("error", () => undefined);
-    child.once("error", (error) => resolve({ ok: false, message: `${PCM_PLAYER.executable} could not be started: ${error.message}` }));
-    child.once("close", (code) => resolve(code === 0 ? { ok: true } : { ok: false, message: `${PCM_PLAYER.executable} rejected the playback arguments (exit ${code}): ${stderr.trim() || "no diagnostics"}` }));
+    child.once("error", (error) => resolve({ ok: false, message: `${player.executable} could not be started: ${error.message}` }));
+    child.once("close", (code) => resolve(code === 0 ? { ok: true } : { ok: false, message: `${player.executable} rejected the playback arguments (exit ${code}): ${stderr.trim() || "no diagnostics"}` }));
     child.stdin.end(Buffer.alloc(Math.round(sampleRate * 0.05) * 2)); // 50 ms of silence
   });
 }
@@ -88,8 +100,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     private readonly trace: (event: Record<string, unknown>) => void = () => {},
     private readonly onSpeechEvent: (event: RealtimeSpeechEvent) => void = () => {},
     private readonly toolExecutor?: RealtimeToolExecutor,
-    /** Playback spec from the platform leaf; defaults to the Windows-installed player. */
-    private readonly player: PcmPlayerSpec = PCM_PLAYER,
+    /** Playback spec from the platform leaf. Omitted means no playback on this host — never a Windows fallback. */
+    private readonly player?: PcmPlayerSpec,
   ) {}
 
   async health(): Promise<ComponentHealth> {

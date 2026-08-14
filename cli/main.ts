@@ -2,7 +2,7 @@ import { AssistantRuntimeError } from "../src/contracts.js";
 import { createAssistantRuntime } from "../src/composition.js";
 import { loadRuntimeSettings } from "../src/config.js";
 import { createHumanTrace } from "../src/console-log.js";
-import { PCM_PLAYER, verifyPlayback } from "../src/adapters.js";
+import { verifyPlayback } from "../src/adapters.js";
 import { memoryKinds, type CreateMemoryInput, type MemoryKind } from "memory-core";
 
 const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -40,10 +40,10 @@ async function main(): Promise<void> {
   const composition = await createAssistantRuntime(settings, trace);
   const runtime = composition.runtime;
   if (command === "health") json(await runtime.health());
-  else if (command === "capabilities") json({ ...runtime.capabilities(), components: await runtime.componentCapabilities(), player: { executable: PCM_PLAYER.executable, sampleRate: settings.realtime.outputSampleRate } });
+  else if (command === "capabilities") json({ ...runtime.capabilities(), components: await runtime.componentCapabilities(), platform: { id: composition.platform.id, status: composition.platform.capability.status, ...(composition.platform.capability.reason ? { reason: composition.platform.capability.reason } : {}) }, player: { executable: composition.platform.player.executable, sampleRate: settings.realtime.outputSampleRate } });
   else if (command === "status") json(runtime.status());
   else if (command === "start") {
-    const playback = await verifyPlayback(settings.realtime.outputSampleRate);
+    const playback = await verifyPlayback(composition.platform.player, settings.realtime.outputSampleRate);
     trace({ type: "playback.preflight", ...playback });
     if (!playback.ok) throw new Error(playback.message);
     await runtime.start();

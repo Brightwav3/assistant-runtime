@@ -25,3 +25,46 @@ remain in Tool System. The production composition supplies a safe read-only
 catalogue (`get_time`, `calculate`, `uptime`, `system_status`) through the same
 bridge. A caller-provided executor replaces that catalogue; side-effecting
 capabilities such as `open_app` remain explicit opt-ins.
+
+## Platform boundary
+
+```text
+createPlatformServices(process.platform) -> PlatformServices
+                                            ├-> createActivationListener()  (ClapListener)
+                                            ├-> createSpeechStack()         (stt/tts/output)
+                                            └-> player                      (PcmPlayerSpec)
+```
+
+Shared composition never names a concrete platform implementation. It receives a
+leaf and reads `capability.status`; an `unsupported` host yields `degraded`
+microphone, playback, and modular components carrying a reason instead of a
+crash or a silent mode change.
+
+Two rules follow from this and are enforced by tests in
+`tests/platform-neutrality.test.ts`:
+
+1. Shared identifiers are platform-neutral. The realtime capture stream is
+   `local-default-microphone`, and the shipped activation `sourceId` default
+   matches it. Concrete device and provider names (`windows_speech_recognition`,
+   `ffplay.exe`) live only inside the leaf and reach diagnostics through the
+   leaf's own descriptors.
+2. Shared realtime playback has no default player. `RealtimeCoreAdapter` takes an
+   optional `PcmPlayerSpec`; when none is supplied it emits `playback.unavailable`
+   and discards audio. It never falls back to the Windows executable.
+   `verifyPlayback(player, sampleRate)` likewise refuses without a player rather
+   than probing one host with another host's binary.
+
+### Leaf loading: audited, unchanged on purpose
+
+`factory.ts` imports the Windows leaf statically. That was audited rather than
+changed, because lazy `import()` would buy nothing here: `composition.ts` already
+imports `activation-core` directly for `ActivationRuntime` and
+`DoubleClapProvider`, so the native `decibri` capture binding loads on any host
+regardless of which leaf is selected. Neither `platform/windows.ts` nor
+`platform/windows-player.ts` executes platform code at import time — they only
+define a function and a constant — so the static import itself is inert.
+
+Making `createPlatformServices()` async to enable lazy loading would change a
+public contract and ripple through composition and tests, for no measured gain.
+The real prerequisite is confirming that `decibri` imports at all on macOS and
+Linux, which needs hardware this project does not have.

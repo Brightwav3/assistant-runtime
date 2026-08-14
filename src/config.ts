@@ -52,7 +52,7 @@ const defaults: RuntimeSettings = {
   assistantId: "assistant.primary",
   mode: "native_realtime",
   inactivityMs: 30_000,
-  activation: { provider: "double_clap", sourceId: "windows-default-microphone", minimumIntervalMs: 150, maximumIntervalMs: 700, amplitudeThreshold: 0.18 },
+  activation: { provider: "double_clap", sourceId: "local-default-microphone", minimumIntervalMs: 150, maximumIntervalMs: 700, amplitudeThreshold: 0.18 },
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user" },
   state: { enabled: true },
@@ -74,7 +74,22 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   return settings;
 }
 
-export async function loadRuntimeSettings(configPath = process.env.JARVIS_CONFIG ?? resolve(process.cwd(), "config.json")): Promise<RuntimeSettings> {
+/**
+ * Configuration path precedence, in order:
+ * 1. an explicit argument to `loadRuntimeSettings`;
+ * 2. `ASSISTANT_CONFIG`;
+ * 3. `JARVIS_CONFIG` (deprecated, retained for compatibility);
+ * 4. `config.json` in the working directory.
+ */
+export function resolveConfigPath(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
+  const primary = env.ASSISTANT_CONFIG?.trim();
+  if (primary) return primary;
+  const legacy = env.JARVIS_CONFIG?.trim();
+  if (legacy) return legacy;
+  return resolve(cwd, "config.json");
+}
+
+export async function loadRuntimeSettings(configPath = resolveConfigPath()): Promise<RuntimeSettings> {
   await loadDotEnv(resolve(configPath, "..", ".env"));
   try {
     await access(configPath);

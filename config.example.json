@@ -4,7 +4,7 @@
   "inactivityMs": 30000,
   "activation": {
     "provider": "double_clap",
-    "sourceId": "windows-default-microphone",
+    "sourceId": "local-default-microphone",
     "minimumIntervalMs": 150,
     "maximumIntervalMs": 700,
     "amplitudeThreshold": 0.18

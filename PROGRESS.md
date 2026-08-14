@@ -47,7 +47,7 @@ Host status after this pass, on the project's evidence scale:
 No macOS or Linux hardware was exercised in this pass. TypeScript compilation is
 not treated as evidence of platform support.
 
-## Echo cancellation — wired, not yet run on hardware
+## Echo cancellation — working on hardware, tuned to one machine
 
 Verified offline on 2026-08-14: `npm run verify` passed with **85 tests**
 (typecheck, tests, build), up from 82. The new coverage proves that what the
@@ -64,10 +64,32 @@ for the first 56 frames (1.1 s), returned to the adaptive filter once it
 converged, and ended at **74.5 dB** of echo return loss enhancement with no
 residual echo above the noise floor.
 
-**None of this has been near a speaker.** The procedure for the hardware run is
-[`docs/echo-cancellation-smoke-test.md`](./docs/echo-cancellation-smoke-test.md),
-and it is unrun. Until it happens the claim is that the wiring is correct, not
-that the assistant stops hearing itself.
+**Run on hardware on 2026-08-14, and it works — roughly.** Laptop microphone,
+Bluetooth speaker, open air, Gemini Live in Czech. The assistant no longer
+interrupts itself, and voice barge-in works. It is not fully characterised: the
+configuration was tuned against a single 35-second recording from this machine,
+and no long session, second room, or second device has been tried.
+
+The route there is worth keeping, because the two obvious answers both failed:
+
+1. **Gate at full strength** — stopped the self-interruption completely and
+   removed barge-in with it. The provider cannot react to an interruption it is
+   never sent. Measured: 72.6% of a session fully suppressed.
+2. **Uniform attenuation** (`suppressionGain: 0.2`) — restored barge-in and let
+   echo through with it. The provider transcribed the assistant's own sentence
+   back as the user's.
+3. **Level-triggered barge-in** — what shipped. The gate stays absolute, and
+   capture is released only while it is too loud to be echo. Echo returns at a
+   median frame peak of 105 of 32768; the user is next to the microphone and
+   reaches 3000-5000, so a threshold at 0.06 separates them with margin.
+
+Cancellation is not what fixed it. On this hardware the adaptive filter reaches
+4.4 dB against 32 dB in simulation, because a Bluetooth speaker re-encodes audio
+through a lossy codec and a linear filter cannot model the result. See AEC
+System's PROGRESS for that measurement.
+
+**The threshold is empirical.** It is tuned to this microphone, this speaker, and
+this room, and it is the first thing to re-check on any other.
 
 Integrating also found a gap in AEC System's contract — a host that aborts
 playback must be able to retract the reference it already pushed — which was

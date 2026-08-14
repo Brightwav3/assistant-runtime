@@ -64,12 +64,12 @@ Speakers audible, at a normal conversational volume.
 
 | # | Step | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Clap twice, let the assistant greet you | it finishes its greeting without interrupting itself | |
+| 1 | Clap twice, let the assistant greet you | it finishes its greeting without interrupting itself | **PASS** 2026-08-14 |
 | 2 | Watch the log during the greeting | `echo.metrics` with `gateSuppressing: true` | |
 | 3 | Say a sentence after it stops | transcribed as your speech, once | |
-| 4 | Read the transcripts back | no transcript is a phonetic rendering of the assistant's own words | |
+| 4 | Read the transcripts back | no transcript is a phonetic rendering of the assistant's own words | **PASS** at `suppressionGain: 0`; **FAILED** at 0.2, which transcribed the assistant's own sentence as the user's |
 | 5 | After ~2 s of assistant speech | `echo.fallback.adaptive` with an `erleDb` figure | |
-| 6 | Interrupt mid-answer by speaking | audio stops; requires `processor` to be `auto` or `adaptive` | |
+| 6 | Interrupt mid-answer by speaking | audio stops | **PASS** 2026-08-14, via `bargeInThreshold` rather than cancellation |
 | 7 | Let a long answer run | `erleDb` in later `echo.metrics` has not collapsed toward 0 | |
 | 8 | Ctrl+C | `echo.recording.stopped` with the session totals | |
 

@@ -7,6 +7,46 @@
 
 Headless, provider-independent composition runtime for the independent assistant cores.
 
+## Delegated voice intelligence
+
+A voice session can hand deeper work to a separately configured reasoning model,
+keep talking while it runs, and speak the result when it arrives. Hardware-verified
+2026-08-14 with Gemini Live 3.1 and a `gemini-3.5-flash-lite` delegation model, at
+roughly two seconds end to end.
+
+```text
+voice model                     delegated text model
+  intelligence_delegate           memory_search, memory_view
+  (and nothing else)              (never intelligence_delegate)
+        │                                   ▲
+        ▼                                   │
+  Delegation Broker ──────► Intelligence Core
+        │                          │
+        │                     Tool System ──► Memory Core
+        ▼
+  Delivery Scheduler ──► the same session, labelled source=delegation
+        interrupt / when_idle / silent
+```
+
+Why it is shaped this way:
+
+- **The acknowledgement must be true when it is spoken.** The broker returns an
+  execution identity before any model runs, so the voice model has something real
+  to acknowledge instead of stalling or inventing an answer.
+- **A background result is not user speech.** It arrives as a context event with
+  `source: "delegation"`, never as a transcript, and the degraded path announces
+  itself so a trace can always tell the two apart.
+- **Neither model can widen its own reach.** The voice model gets one tool; the
+  delegated model gets the downstream catalogue but not the delegation tool, which
+  would let it recurse. Bounds are enforced inside Memory Core, not trusted to a
+  declaration a model can read.
+- **Roles are independent settings.** `delegation.model` is never derived from
+  `realtime.model`, so a voice upgrade cannot silently change what reasons.
+
+Enable it with `delegation.enabled` (off by default; it requires memory). The manual
+evidence procedure, including what remains unverified, is in
+[docs/delegated-voice-smoke-test.md](./docs/delegated-voice-smoke-test.md).
+
 ## Commands
 
 ```powershell

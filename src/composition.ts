@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { ActivationRuntime, DoubleClapProvider, WindowsClapListener } from "activation-core";
+import { ActivationRuntime, DoubleClapProvider, type ClapListener } from "activation-core";
 import { installCatalogue, nodeSystemProbe, nodeUptimeSource } from "host-tools";
 import { MemoryRuntime, SqliteMemoryStore } from "memory-core";
 import { REALTIME_INPUT_FORMAT, GeminiLiveProvider, RealtimeCore } from "realtime-core";
@@ -11,11 +11,29 @@ import { ActivationCoreAdapter, RealtimeCoreAdapter, asDiagnosticComponent } fro
 import { ConversationMemoryWriter } from "./conversation-memory.js";
 import { ModularSpeechDriver } from "./modular.js";
 import { ToolSystemRealtimeToolExecutor } from "./tool-bridge.js";
+import { createPlatformServices } from "./platform/factory.js";
+import type { PlatformServices } from "./platform/contracts.js";
 import type { ComponentHealth, RealtimeToolExecutor, RuntimeComponent, StatePublisher } from "./contracts.js";
 import type { RuntimeSettings } from "./config.js";
 
-export interface AssistantComposition { runtime: AssistantRuntime; memory?: MemoryRuntime; state?: StateRuntime; tools?: ToolRuntime; components: RuntimeComponent[]; }
-export interface AssistantCompositionOptions { microphoneFactory?: () => Promise<{ on(event: "data", listener: (chunk: Buffer) => void): unknown; off?(event: "data", listener: (chunk: Buffer) => void): unknown; stop(): void }>; realtimeToolExecutor?: RealtimeToolExecutor }
+export interface AssistantComposition { runtime: AssistantRuntime; memory?: MemoryRuntime; state?: StateRuntime; tools?: ToolRuntime; components: RuntimeComponent[]; platform: PlatformServices; }
+export interface AssistantCompositionOptions {
+  microphoneFactory?: () => Promise<{ on(event: "data", listener: (chunk: Buffer) => void): unknown; off?(event: "data", listener: (chunk: Buffer) => void): unknown; stop(): void }>;
+  realtimeToolExecutor?: RealtimeToolExecutor;
+  /** Overrides the platform leaf. Production omits it and gets `process.platform`. */
+  platform?: PlatformServices;
+}
+
+/** Reports an absent platform leaf as a degraded component instead of crashing or faking support. */
+function unavailableComponent(id: string, reason: string, extra: Record<string, unknown> = {}): RuntimeComponent {
+  return {
+    id,
+    start: async () => undefined,
+    stop: async () => undefined,
+    health: async (): Promise<ComponentHealth> => ({ state: "degraded", detail: reason }),
+    capabilities: async () => ({ available: false, reason, ...extra }),
+  };
+}
 
 const DEFAULT_REALTIME_TOOLS = ["get_time", "calculate", "uptime", "system_status"] as const;
 
@@ -58,6 +76,10 @@ async function memoryInstruction(memory: MemoryRuntime | undefined): Promise<str
 }
 
 export async function createAssistantRuntime(settings: RuntimeSettings, trace: (event: Record<string, unknown>) => void = () => {}, options: AssistantCompositionOptions = {}): Promise<AssistantComposition> {
+  const platform = options.platform ?? createPlatformServices();
+  const platformAvailable = platform.capability.status !== "unsupported";
+  const platformReason = platform.capability.reason ?? `Platform '${platform.id}' has no adapter.`;
+  if (!platformAvailable) trace({ type: "platform.unsupported", platform: platform.id, reason: platformReason });
   const state = settings.state.enabled ? new StateRuntime() : undefined;
   const memory = settings.memory.enabled ? new MemoryRuntime({ store: new SqliteMemoryStore({ path: settings.memory.path }) }) : undefined;
   const conversationMemory = memory ? new ConversationMemoryWriter(memory, settings.memory.scopeSubjectId, trace) : undefined;
@@ -77,12 +99,18 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
-  }, (event) => void conversationMemory?.handle(event), realtimeToolExecutor);
-  const modular = settings.mode === "modular" ? new ModularSpeechDriver({ memory, memorySubjectId: settings.memory.scopeSubjectId, trace }) : undefined;
+  }, (event) => void conversationMemory?.handle(event), realtimeToolExecutor, platform.player);
+  const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, trace }) : undefined;
 
-  const microphone = new WindowsClapListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { if (settings.mode === "native_realtime") void realtime.sendMicrophonePcm(frame); modular?.pushMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) });
-  const microphoneComponent: RuntimeComponent = { id: "microphone", start: () => microphone.start(), stop: () => microphone.stop(), health: async (): Promise<ComponentHealth> => ({ state: microphone.isRunning() ? "healthy" : "unhealthy" }), capabilities: async () => ({ pcmInput: true, rawAudioPersistence: false }) };
-  const playbackComponent: RuntimeComponent = { id: "playback", start: async () => undefined, stop: async () => undefined, health: async () => ({ state: "healthy" as const }), capabilities: async () => ({ executable: "ffplay.exe", sampleRate: settings.realtime.outputSampleRate }) };
+  const microphone: ClapListener | undefined = platformAvailable
+    ? platform.createActivationListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { if (settings.mode === "native_realtime") void realtime.sendMicrophonePcm(frame); modular?.pushMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) })
+    : undefined;
+  const microphoneComponent: RuntimeComponent = microphone
+    ? { id: "microphone", start: () => microphone.start(), stop: () => microphone.stop(), health: async (): Promise<ComponentHealth> => ({ state: microphone.isRunning() ? "healthy" : "unhealthy" }), capabilities: async () => ({ pcmInput: true, rawAudioPersistence: false, platform: platform.id }) }
+    : unavailableComponent("microphone", platformReason, { pcmInput: false, platform: platform.id });
+  const playbackComponent: RuntimeComponent = platformAvailable
+    ? { id: "playback", start: async () => undefined, stop: async () => undefined, health: async () => ({ state: "healthy" as const }), capabilities: async () => ({ executable: platform.player.executable, sampleRate: settings.realtime.outputSampleRate, platform: platform.id }) }
+    : unavailableComponent("playback", platformReason, { platform: platform.id });
   const components: RuntimeComponent[] = [
     ...(tools ? [toolComponent(tools)] : []),
     ...(memory ? [{
@@ -93,12 +121,14 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       capabilities: async () => ({ ...(await memory.capabilities()) }),
     }] : []),
     ...(state ? [asDiagnosticComponent("state", state)] : []),
-    ...(modular ? [asDiagnosticComponent("modular", modular)] : [{ id: "realtime", start: async () => undefined, stop: async () => realtime.stop(), health: () => realtime.health(), capabilities: () => realtime.capabilities() }]),
+    ...(settings.mode === "modular"
+      ? [modular ? asDiagnosticComponent("modular", modular) : unavailableComponent("modular", platformReason, { platform: platform.id })]
+      : [{ id: "realtime", start: async () => undefined, stop: async () => realtime.stop(), health: () => realtime.health(), capabilities: () => realtime.capabilities() }]),
     playbackComponent,
     activation,
     microphoneComponent,
   ];
   const publisher = statePublisher(state, trace);
   const runtime = new AssistantRuntime({ assistantId: settings.assistantId, mode: settings.mode, inactivityMs: settings.inactivityMs, state: publisher }, { components, activation, nativeRealtime: settings.mode === "native_realtime" ? realtime : undefined, modular });
-  return { runtime, memory, state, tools, components };
+  return { runtime, memory, state, tools, components, platform };
 }

@@ -4,6 +4,7 @@ import { IntelligenceRuntime } from "intelligence-core";
 import { VoiceRuntime } from "voice-core";
 import { spawn } from "node:child_process";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RealtimeToolExecutor, RuntimeComponent } from "./contracts.js";
+import type { PcmPlayerSpec } from "./platform/contracts.js";
 import { PcmInputFrameizer, REALTIME_MICROPHONE_STREAM_ID } from "./realtime-audio.js";
 
 /** Adapts Activation Core's async event stream without importing its internals. */
@@ -42,8 +43,8 @@ export class PcmPlaybackController {
   abort(): void { this.sink?.abort(); this.sink = undefined; this.outputId = undefined; }
 }
 
-function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unknown>) => void): PcmPlaybackSink {
-  const child = spawn(PCM_PLAYER.executable, PCM_PLAYER.args(sampleRate), { stdio: "pipe", windowsHide: true });
+function spawnPcmPlayback(sampleRate: number, trace: (event: Record<string, unknown>) => void, player: PcmPlayerSpec = PCM_PLAYER): PcmPlaybackSink {
+  const child = spawn(player.executable, player.args(sampleRate), { stdio: "pipe", windowsHide: true });
   let intentionallyAborted = false;
   trace({ type: "playback.spawned", timestampMs: Date.now(), pid: child.pid ?? null });
   child.on("error", (error) => trace({ type: "playback.error", timestampMs: Date.now(), message: error instanceof Error ? error.message : String(error) }));
@@ -87,6 +88,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     private readonly trace: (event: Record<string, unknown>) => void = () => {},
     private readonly onSpeechEvent: (event: RealtimeSpeechEvent) => void = () => {},
     private readonly toolExecutor?: RealtimeToolExecutor,
+    /** Playback spec from the platform leaf; defaults to the Windows-installed player. */
+    private readonly player: PcmPlayerSpec = PCM_PLAYER,
   ) {}
 
   async health(): Promise<ComponentHealth> {
@@ -153,7 +156,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.trace({ type: "realtime.connect.succeeded", timestampMs: Date.now(), sessionId: session.id });
     await this.enqueueFrames(session, this.pendingFrames.splice(0));
 
-    const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace));
+    const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace, this.player));
     let chunks = 0;
     let bytesWritten = 0;
     let firstChunkAt: number | undefined;

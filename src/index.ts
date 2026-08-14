@@ -6,3 +6,4 @@ export * from "./composition.js";
 export * from "./modular.js";
 export * from "./tool-bridge.js";
 export * from "./realtime-audio.js";
+export * from "./platform/index.js";

@@ -14,10 +14,26 @@ export class MemoryExtractionOrchestrator {
     return result;
   }
 
+  /**
+   * A doubtful transcript is context, not evidence. When every turn a candidate cites is
+   * labelled `unreliable`, storing it would turn a mis-detected utterance into a durable
+   * fact, so it is downgraded to `confirm` and waits for the user instead.
+   */
+  private restsOnlyOnUnreliableTurns(candidate: MemoryCandidate, input: MemoryExtractionInput): boolean {
+    const cited = candidate.evidence.filter((item) => item.sourceType === "turn");
+    if (cited.length === 0) return false;
+    return cited.every((item) => input.turns.find((turn) => turn.turnId === item.sourceId)?.transcriptConfidence === "unreliable");
+  }
+
   private async applyCandidate(candidate: MemoryCandidate, input: MemoryExtractionInput, result: MemoryExtractionResult): Promise<void> {
     if (candidate.subjectId !== input.subjectId || !candidate.reason.trim() || candidate.evidence.length === 0) {
       this.trace({ type: "memory.candidate.rejected", candidateId: candidate.candidateId, reason: "candidate validation failed" });
       result.discarded.push(candidate.candidateId);
+      return;
+    }
+    if (candidate.disposition === "store" && this.restsOnlyOnUnreliableTurns(candidate, input)) {
+      this.trace({ type: "memory.candidate.confirm", candidateId: candidate.candidateId, reason: "every cited turn has an unreliable transcript" });
+      result.confirmed.push(candidate.candidateId);
       return;
     }
     if (candidate.disposition === "store") {

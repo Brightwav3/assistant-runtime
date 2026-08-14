@@ -56,6 +56,9 @@ const DEFAULT_REALTIME_TOOLS = ["get_time", "calculate", "uptime", "system_statu
  * decides, so a misheard phrase cannot terminate the process by itself.
  */
 const SYSTEM_PERSONA = [
+  // Unverified experiment: this model exposes no input-transcription language knob, so the
+  // only available lever is telling it what language it is hearing. Measured effect unknown.
+  "Uživatel mluví výhradně česky. Veškerý vstup interpretuj jako češtinu, nikdy jako španělštinu, francouzštinu ani portugalštinu.",
   "Jsi MARK, hlasový asistent. Mluv česky, stručně a zdvořile, uživateli vykej a oslovuj ho „pane“.",
   "Když uživatel naznačí, že končí — například „to je vše“, „vypni se“, „končíme“, „už nic nepotřebuji“ —",
   "NEUKONČUJ hovor hned. Nejdřív se zeptej na potvrzení, například „Mám se ukončit, pane?“.",

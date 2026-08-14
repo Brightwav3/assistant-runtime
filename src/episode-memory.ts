@@ -11,6 +11,23 @@ export interface EpisodeMemoryWriterOptions {
   trace?: (event: Record<string, unknown>) => void;
 }
 
+/**
+ * Input transcription runs automatic per-session language detection that this model
+ * exposes no knob for. Measured on real conversations: the first user turn of a session
+ * is reliably mis-detected — Czech rendered phonetically as Spanish, French, or
+ * Portuguese — and very short utterances stay wrong even later, while detection
+ * converges once enough audio has accumulated.
+ *
+ * The text is still stored, because a wrong transcript is evidence of what went wrong.
+ * It is labelled so nothing downstream treats it as a faithful record.
+ */
+const MINIMUM_RELIABLE_TRANSCRIPT_LENGTH = 12;
+
+export function assessTranscript(input: { text: string; isFirstUserTurn: boolean }): "reliable" | "unreliable" {
+  if (input.isFirstUserTurn) return "unreliable";
+  return input.text.trim().length < MINIMUM_RELIABLE_TRANSCRIPT_LENGTH ? "unreliable" : "reliable";
+}
+
 /** Converts realtime lifecycle events into bounded textual episode records. Raw audio is never accepted. */
 export class EpisodeMemoryWriter {
   private readonly episodes: EpisodeRuntime;
@@ -21,6 +38,7 @@ export class EpisodeMemoryWriter {
   private readonly pendingOutput = new Map<string, { turnId: string; text: string }>();
   private readonly knownSessions = new Set<string>();
   private readonly closedSessions = new Set<string>();
+  private readonly sessionsWithUserTurn = new Set<string>();
   private readonly turns = new Map<string, MemoryExtractionTurn[]>();
   private queue = Promise.resolve();
 
@@ -54,8 +72,14 @@ export class EpisodeMemoryWriter {
     }
     if (event.type === "transcript.final" && event.source === "input") {
       await this.ensureSession(sessionId);
-      const turn = await this.episodes.appendTurn(sessionId, { speaker: "user", text: event.text, status: "complete" });
-      if (turn) this.recordTurn(sessionId, turn.turnId, "user", turn.text, turn.status);
+      const isFirstUserTurn = !this.sessionsWithUserTurn.has(sessionId);
+      this.sessionsWithUserTurn.add(sessionId);
+      const transcriptConfidence = assessTranscript({ text: event.text, isFirstUserTurn });
+      const turn = await this.episodes.appendTurn(sessionId, { speaker: "user", text: event.text, status: "complete", transcriptConfidence });
+      if (turn) {
+        this.recordTurn(sessionId, turn.turnId, "user", turn.text, turn.status, transcriptConfidence);
+        if (transcriptConfidence === "unreliable") this.trace({ type: "memory.transcript.unreliable", sessionId, turnId: turn.turnId, firstUserTurn: isFirstUserTurn, length: event.text.trim().length });
+      }
       return;
     }
     if ((event.type === "transcript.partial" || event.type === "transcript.final") && event.source === "output") {
@@ -112,10 +136,10 @@ export class EpisodeMemoryWriter {
     }
   }
 
-  private recordTurn(sessionId: string, turnId: string, speaker: MemoryExtractionTurn["speaker"], text: string, status: MemoryExtractionTurn["status"]): void {
+  private recordTurn(sessionId: string, turnId: string, speaker: MemoryExtractionTurn["speaker"], text: string, status: MemoryExtractionTurn["status"], transcriptConfidence?: MemoryExtractionTurn["transcriptConfidence"]): void {
     const turns = this.turns.get(sessionId) ?? [];
     const existing = turns.find((turn) => turn.turnId === turnId);
-    if (existing) { existing.text = text; existing.status = status; } else turns.push({ turnId, speaker, text, status });
+    if (existing) { existing.text = text; existing.status = status; if (transcriptConfidence) existing.transcriptConfidence = transcriptConfidence; } else turns.push({ turnId, speaker, text, status, ...(transcriptConfidence ? { transcriptConfidence } : {}) });
     this.turns.set(sessionId, turns);
   }
 

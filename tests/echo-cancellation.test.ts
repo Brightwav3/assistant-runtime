@@ -12,7 +12,7 @@ const CAPTURE_FRAME = 320; // 20 ms
 const REFERENCE_CHUNK = 480; // 20 ms
 const ECHO_DELAY_SAMPLES = 3210; // ~200 ms, the Bluetooth range measured on the failing hardware
 
-const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 };
+const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, minErleDb: 6, recoveryFrames: 25 };
 
 /** Deterministic PRNG, so a failure reproduces identically. */
 function random(seed: number): () => number {

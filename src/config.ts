@@ -31,6 +31,14 @@ export interface EchoCancellationSettings {
    * window means the filter never converges and the gate never lets go.
    */
   maxDelayMs: number;
+  /**
+   * Gain applied to capture while the gate is suppressing. 0 is silence, which is certain but
+   * costs voice barge-in entirely: the provider cannot hear an interruption it is never sent.
+   * A small value keeps the ratio between the user and the echo and moves both down, which
+   * restores barge-in when near-end speech is louder at the microphone than the echo is —
+   * measured on this hardware, echo sits at a median peak of 105 against 3000-5000 for speech.
+   */
+  suppressionGain: number;
   /** Echo return loss enhancement, in dB, below which `auto` stops trusting the adaptive filter. */
   minErleDb: number;
   /** Consecutive healthy frames required before `auto` returns to the adaptive filter. */
@@ -86,7 +94,7 @@ const defaults: RuntimeSettings = {
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
-  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, minErleDb: 6, recoveryFrames: 25 },
+  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, minErleDb: 6, recoveryFrames: 25 },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -107,6 +115,7 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "auto") throw new Error("echoCancellation.processor must be adaptive, gate, or auto.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");
   if (!Number.isFinite(echo.maxDelayMs) || echo.maxDelayMs <= 0) throw new Error("echoCancellation.maxDelayMs must be greater than zero.");
+  if (!(echo.suppressionGain >= 0 && echo.suppressionGain <= 1)) throw new Error("echoCancellation.suppressionGain must be within [0, 1].");
   if (!Number.isFinite(echo.minErleDb)) throw new Error("echoCancellation.minErleDb must be a number.");
   if (!Number.isInteger(echo.recoveryFrames) || echo.recoveryFrames < 1) throw new Error("echoCancellation.recoveryFrames must be a positive integer.");
   if (echo.recordDir && !isAbsolute(echo.recordDir)) echo.recordDir = resolve(basePath, echo.recordDir);

@@ -58,7 +58,7 @@ export class EchoGuard {
   ) {
     const config = resolveConfig({
       captureFormat: { sampleRate: captureSampleRate },
-      gate: { tailMs: settings.tailMs },
+      gate: { tailMs: settings.tailMs, suppressionGain: settings.suppressionGain },
       delay: { maxDelayMs: settings.maxDelayMs },
     });
     // Both processors are constructed when the mode can use either, so a fallback is a
@@ -176,6 +176,7 @@ export class EchoGuard {
       processor: this.settings.processor,
       tailMs: this.settings.tailMs,
       maxDelayMs: this.settings.maxDelayMs,
+      suppressionGain: this.settings.suppressionGain,
       minErleDb: this.settings.minErleDb,
       preservesFullDuplex: this.settings.processor !== "gate",
       recording: Boolean(this.settings.recordDir),

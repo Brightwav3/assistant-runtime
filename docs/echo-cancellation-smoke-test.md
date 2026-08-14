@@ -44,7 +44,7 @@ Everything in [`hardware-smoke-test.md`](./hardware-smoke-test.md), plus:
 
 | Value | Behaviour | What it proves |
 | --- | --- | --- |
-| `auto` | adaptive filter, falling back to the gate whenever it is not measurably cancelling | the intended production behaviour |
+| `cancel_or_suppress` | the filter while it reports measurable cancellation, the gate when it does not | the intended production behaviour |
 | `adaptive` | cancellation only, full duplex always | what the filter really achieves on your hardware, including when it fails |
 | `gate` | suppression only, no voice barge-in | that the self-interruption loop is gone, with certainty |
 

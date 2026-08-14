@@ -27,12 +27,22 @@ test("inactivity timeout cancels native interaction", async () => {
 });
 
 test("native activity resets the inactivity timeout", async () => {
+  // Timed generously on purpose. At a 20 ms timeout with 10 ms sleeps this failed roughly
+  // one run in twenty: under load a sleep overshoots, the interaction times out before the
+  // activity call lands, and the failure looks like a defect in the runtime rather than in
+  // the test's arithmetic. The margins here need a 100 ms overshoot to reproduce that.
   let activity!: () => void;
-  const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: 20 }, { components: [], nativeRealtime: { async open(input) { activity = (input as unknown as { onActivity?: () => void }).onActivity!; return { async close() {}, done: new Promise<void>(() => {}) }; } } });
+  const timeoutMs = 200;
+  const runtime = new AssistantRuntime({ assistantId: "assistant.primary", mode: "native_realtime", inactivityMs: timeoutMs }, { components: [], nativeRealtime: { async open(input) { activity = (input as unknown as { onActivity?: () => void }).onActivity!; return { async close() {}, done: new Promise<void>(() => {}) }; } } });
   await runtime.start(); await runtime.activate();
-  await new Promise((resolve) => setTimeout(resolve, 10)); activity();
-  await new Promise((resolve) => setTimeout(resolve, 15));
-  assert.ok(runtime.status().interaction);
+
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs / 2));
+  assert.ok(runtime.status().interaction, "the interaction must still exist when activity is reported");
+  activity();
+
+  // Past the original deadline, but inside the one the activity call should have set.
+  await new Promise((resolve) => setTimeout(resolve, timeoutMs * 0.75));
+  assert.ok(runtime.status().interaction, "activity must have moved the deadline");
   await runtime.cancel(); await runtime.stop();
 });
 test("uses published Activation and Realtime Core packages end to end", async () => {

@@ -11,7 +11,7 @@ import type { EchoCancellationSettings } from "../src/config.js";
  * cancellation itself is covered in echo-cancellation.test.ts.
  */
 
-const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "gate", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInThreshold: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 };
+const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "gate", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 };
 const INPUT_FORMAT = { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le" as const, frameDurationMs: 20 };
 
 class FakeSession implements RealtimeSpeechSession {
@@ -63,18 +63,18 @@ test("the provider is sent cleaned capture, not what the microphone heard", asyn
 test("capabilities say whether cancellation is on and what it costs", async () => {
   const provider = new FakeProvider();
   const core = { connect: () => provider.connect(), capabilities: async () => ({ providers: [await provider.capabilities()] }), health: () => provider.health() };
-  const guard = new EchoGuard({ ...SETTINGS, processor: "auto" }, 16_000, 24_000, () => {});
+  const guard = new EchoGuard({ ...SETTINGS, processor: "cancel_or_suppress" }, 16_000, 24_000, () => {});
   const withGuard = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT }, () => {}, () => {}, undefined, undefined, guard);
   const without = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: INPUT_FORMAT });
 
   // Readable before a session exists, so a host can tell an assistant that will hear itself
   // from one that will not without having to start a conversation to find out.
   assert.deepEqual(await withGuard.capabilities().then((value) => value.echoCancellation), {
-    processor: "auto",
+    processor: "cancel_or_suppress",
     tailMs: 400,
     maxDelayMs: 1_000,
     suppressionGain: 0,
-    bargeInThreshold: 0,
+    bargeInMargin: 0,
     minErleDb: 6,
     preservesFullDuplex: true,
     recording: false,

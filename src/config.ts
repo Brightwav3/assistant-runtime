@@ -16,11 +16,16 @@ export interface RuntimeSettings {
 export interface EchoCancellationSettings {
   enabled: boolean;
   /**
-   * `adaptive` keeps full duplex and may degrade as the capture and playback clocks drift
-   * apart; `gate` is certain but costs the ability to interrupt by voice; `auto` runs the
-   * adaptive filter and falls back to the gate when it reports it is not cancelling.
+   * `adaptive` cancels and keeps full duplex, and degrades as the capture and playback
+   * clocks drift apart; `gate` suppresses, which is certain and costs voice barge-in;
+   * `cancel_or_suppress` uses the filter's output while it reports measurable cancellation
+   * and the gate's when it does not.
+   *
+   * Named for what it does rather than "auto", because on hardware where the filter never
+   * converges — a Bluetooth speaker, measured — this setting never cancels anything, and a
+   * reader is entitled to know that from the name.
    */
-  processor: "adaptive" | "gate" | "auto";
+  processor: "adaptive" | "gate" | "cancel_or_suppress";
   /** Suppression tail after playback stops, covering output latency. Bluetooth runs 150-300 ms. */
   tailMs: number;
   /**
@@ -40,16 +45,16 @@ export interface EchoCancellationSettings {
    */
   suppressionGain: number;
   /**
-   * Peak capture level, 0..1, at which suppression is lifted because the sound is too loud
-   * to be echo.
+   * How many times louder than the measured echo a sound must be before suppression lifts
+   * for it. 0 disables barge-in and keeps the gate absolute.
    *
    * A gate that never lifts removes voice barge-in entirely: the provider cannot react to an
-   * interruption it is never sent. Measured on this hardware, echo returns at a median frame
-   * peak of 105 of 32768 while near-end speech reaches 3000-5000, so a threshold between
-   * them separates the two without any cancellation at all. Set to 0 to disable and keep the
-   * gate absolute.
+   * interruption it is never sent. The echo level is measured continuously from the capture
+   * the gate is suppressing, rather than configured, because it is a property of the room,
+   * the speaker, and the microphone gain — an absolute threshold tuned in one room is the
+   * first thing that is wrong in the next one.
    */
-  bargeInThreshold: number;
+  bargeInMargin: number;
   /** How long capture keeps flowing after a barge-in, so a sentence is not chopped into frames. */
   bargeInHoldMs: number;
   /** Echo return loss enhancement, in dB, below which `auto` stops trusting the adaptive filter. */
@@ -107,7 +112,7 @@ const defaults: RuntimeSettings = {
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
-  echoCancellation: { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInThreshold: 0.06, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
+  echoCancellation: { enabled: true, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 2, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -125,11 +130,11 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   if (settings.memory.enabled && !settings.memory.path) throw new Error("memory.path is required when memory is enabled.");
   if (settings.memory.enabled && !isAbsolute(settings.memory.path)) settings.memory.path = resolve(basePath, settings.memory.path);
   const echo = settings.echoCancellation;
-  if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "auto") throw new Error("echoCancellation.processor must be adaptive, gate, or auto.");
+  if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "cancel_or_suppress") throw new Error("echoCancellation.processor must be adaptive, gate, or cancel_or_suppress.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");
   if (!Number.isFinite(echo.maxDelayMs) || echo.maxDelayMs <= 0) throw new Error("echoCancellation.maxDelayMs must be greater than zero.");
   if (!(echo.suppressionGain >= 0 && echo.suppressionGain <= 1)) throw new Error("echoCancellation.suppressionGain must be within [0, 1].");
-  if (!(echo.bargeInThreshold >= 0 && echo.bargeInThreshold <= 1)) throw new Error("echoCancellation.bargeInThreshold must be within [0, 1].");
+  if (!Number.isFinite(echo.bargeInMargin) || echo.bargeInMargin < 0) throw new Error("echoCancellation.bargeInMargin must be zero or more.");
   if (!Number.isFinite(echo.bargeInHoldMs) || echo.bargeInHoldMs < 0) throw new Error("echoCancellation.bargeInHoldMs must be zero or more.");
   if (!Number.isFinite(echo.minErleDb)) throw new Error("echoCancellation.minErleDb must be a number.");
   if (!Number.isInteger(echo.recoveryFrames) || echo.recoveryFrames < 1) throw new Error("echoCancellation.recoveryFrames must be a positive integer.");

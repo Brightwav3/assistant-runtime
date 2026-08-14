@@ -56,6 +56,16 @@ hear it. That gap was added to AEC System's contract as a result.
 double clap while the assistant is speaking is not echo, and gating it would make
 the assistant unable to be activated by someone standing next to a speaker.
 
+Suppression lifts for sound too loud to be echo, and the level that means is
+measured rather than configured. The gate cannot tell the user from the
+assistant; the microphone can, because echo arrives attenuated by the room while
+the user does not. A decaying peak of the capture being suppressed gives the echo
+level as this room and this microphone gain deliver it, frames loud enough to be
+speech are excluded from it so a barge-in cannot raise the bar that admitted it,
+and half a second of listening precedes any barge-in so the assistant's own voice
+is never what unlocks the gate. An absolute threshold was tried first and was
+wrong the moment anything about the room changed.
+
 The fallback policy lives here rather than in AEC System, because choosing
 between full duplex and certainty is a product decision, not an audio one. The
 runtime holds both processors, uses the adaptive output while it reports a

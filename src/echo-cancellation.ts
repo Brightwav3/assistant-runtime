@@ -4,6 +4,26 @@ import { AdaptiveEchoProcessor, GateEchoProcessor, resolveConfig, type AudioFram
 import type { EchoCancellationSettings } from "./config.js";
 
 /**
+ * How fast the measured echo level falls when the room goes quieter. Roughly a 14 s
+ * half-life at 20 ms frames, so a single loud burst of echo does not hold the barge-in
+ * threshold up for the rest of the conversation.
+ */
+const ECHO_PEAK_DECAY = 0.999;
+
+/** No sound below this is ever treated as an interruption, whatever the echo estimate says. */
+const MINIMUM_BARGE_IN_LEVEL = 0.02;
+
+/**
+ * Suppressed frames observed before barge-in is allowed at all.
+ *
+ * Until the echo has been measured the threshold is only the floor above, which on a
+ * microphone whose echo is louder than the floor would admit the echo itself. Half a second
+ * of listening first costs a barge-in nobody has attempted yet and prevents the gate
+ * unlocking itself with the assistant's own voice.
+ */
+const BARGE_IN_WARMUP_FRAMES = 25;
+
+/**
  * Removes the assistant's own played audio from the microphone stream before it reaches
  * the realtime provider.
  *
@@ -39,6 +59,13 @@ export class EchoGuard {
   /** Host-clock time until which a barge-in keeps capture flowing through a closed gate. */
   private bargeInUntilMs = 0;
   private loudFrames = 0;
+  /**
+   * Decaying peak of the capture the gate is suppressing, which is the echo as this room
+   * and this microphone gain actually deliver it. Frames loud enough to be near-end speech
+   * are excluded, so the estimate tracks the echo rather than the person talking over it.
+   */
+  private echoPeak = 0;
+  private suppressedFramesObserved = 0;
   private framesProcessed = 0;
   private recorders?: { reference: WriteStream; capture: WriteStream; cleaned: WriteStream };
   /**
@@ -191,7 +218,7 @@ export class EchoGuard {
    * once it has.
    */
   private isBargingIn(captured: Int16Array, timestampMs: number): boolean {
-    if (this.settings.bargeInThreshold <= 0) return false;
+    if (this.settings.bargeInMargin <= 0) return false;
     if (timestampMs < this.bargeInUntilMs) return true;
 
     let peak = 0;
@@ -199,7 +226,19 @@ export class EchoGuard {
       const magnitude = Math.abs(captured[i]);
       if (magnitude > peak) peak = magnitude;
     }
-    if (peak / 32768 < this.settings.bargeInThreshold) {
+    const level = peak / 32768;
+    this.suppressedFramesObserved += 1;
+    if (this.suppressedFramesObserved <= BARGE_IN_WARMUP_FRAMES) {
+      this.echoPeak = Math.max(level, this.echoPeak * ECHO_PEAK_DECAY);
+      this.loudFrames = 0;
+      return false;
+    }
+
+    const threshold = this.bargeInLevel();
+    if (level < threshold) {
+      // Only frames that look like echo update the estimate, so a barge-in cannot raise the
+      // bar that admitted it and lock the user out of the next one.
+      this.echoPeak = Math.max(level, this.echoPeak * ECHO_PEAK_DECAY);
       this.loudFrames = 0;
       return false;
     }
@@ -207,10 +246,20 @@ export class EchoGuard {
     this.loudFrames += 1;
     if (this.loudFrames < 2) return false;
     if (timestampMs >= this.bargeInUntilMs) {
-      this.trace({ type: "echo.bargein", timestampMs, peak: Number((peak / 32768).toFixed(3)) });
+      this.trace({ type: "echo.bargein", timestampMs, peak: Number(level.toFixed(3)), threshold: Number(this.bargeInLevel().toFixed(3)) });
     }
     this.bargeInUntilMs = timestampMs + this.settings.bargeInHoldMs;
     return true;
+  }
+
+  /**
+   * The level a sound has to reach right now to be treated as the user rather than the
+   * assistant. Floored so that a session which has heard no echo yet — or one on a
+   * microphone quiet enough that the echo estimate collapses — does not open the gate for
+   * room noise.
+   */
+  private bargeInLevel(): number {
+    return Math.max(MINIMUM_BARGE_IN_LEVEL, this.settings.bargeInMargin * this.echoPeak);
   }
 
   /** What this guard is configured to do, readable before a session exists. */
@@ -220,7 +269,7 @@ export class EchoGuard {
       tailMs: this.settings.tailMs,
       maxDelayMs: this.settings.maxDelayMs,
       suppressionGain: this.settings.suppressionGain,
-      bargeInThreshold: this.settings.bargeInThreshold,
+      bargeInMargin: this.settings.bargeInMargin,
       minErleDb: this.settings.minErleDb,
       preservesFullDuplex: this.settings.processor !== "gate",
       recording: Boolean(this.settings.recordDir),
@@ -240,6 +289,9 @@ export class EchoGuard {
       doubleTalkBlocks: adaptive?.doubleTalkBlocks ?? 0,
       divergenceEvents: adaptive?.divergenceEvents ?? 0,
       gateSuppressing: gate?.gateSuppressing ?? false,
+      echoPeak: Number(this.echoPeak.toFixed(4)),
+      echoMeasured: this.suppressedFramesObserved > BARGE_IN_WARMUP_FRAMES,
+      bargeInLevel: Number(this.bargeInLevel().toFixed(4)),
       framesSuppressed: gate?.framesSuppressed ?? 0,
     };
   }
@@ -288,6 +340,8 @@ export class EchoGuard {
     this.usingGate = this.settings.processor === "gate";
     this.bargeInUntilMs = 0;
     this.loudFrames = 0;
+    this.echoPeak = 0;
+    this.suppressedFramesObserved = 0;
   }
 }
 

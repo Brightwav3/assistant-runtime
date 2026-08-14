@@ -57,7 +57,7 @@ test("an unsupported host reports no player and starts no playback process", asy
     realtime: { provider: "gemini", inputSampleRate: 16000, outputSampleRate: 24000 },
     memory: { enabled: false, path: join(packageRoot, "unused.sqlite"), scopeSubjectId: "test-user" },
     state: { enabled: false },
-    echoCancellation: { enabled: false, processor: "auto" as const, tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInThreshold: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
+    echoCancellation: { enabled: false, processor: "cancel_or_suppress" as const, tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
   };
   const composition = await createAssistantRuntime(settings, (event) => traces.push(event), { platform: createPlatformServices("darwin") });
   try {

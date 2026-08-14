@@ -34,7 +34,11 @@ stream. `start` runs until `SIGINT` or `SIGTERM`.
 
 On open speakers the assistant hears itself, and the provider's voice activity detection cannot tell that voice from the user's — measured on 2026-08-14, it interrupted itself before a conversation could start. `echoCancellation` in `config.json` puts [AEC System](https://github.com/Brightwav3/aec-system) between the microphone and the provider: what the assistant plays becomes a reference, and what the provider receives is capture with that reference removed.
 
-`processor` is `auto` (adaptive cancellation, falling back to deterministic suppression whenever it is not measurably working), `adaptive` (full duplex always), or `gate` (certain, but no voice barge-in). `recordDir` writes the played, captured, and cleaned streams for offline analysis; it records the microphone, so it is off by default.
+`processor` is `cancel_or_suppress` (the filter's output while it reports measurable cancellation, the gate's when it does not), `adaptive` (full duplex always), or `gate` (certain, but no voice barge-in).
+
+Suppression is not necessarily silence. `bargeInMargin` lifts it for sound too loud to be echo — the echo level is measured continuously from the capture being suppressed rather than configured, because it is a property of the room and the microphone gain, not of this repository. Measured on a Bluetooth speaker, this is what makes barge-in work at all: the filter reaches 4.4 dB there, so cancellation is not what restores full duplex.
+
+`recordDir` writes the played, captured, and cleaned streams for offline analysis; it records the microphone, so it is off by default and worth switching off again after tuning.
 
 Activation keeps receiving raw capture — a double clap is not echo and must still be heard while the assistant is speaking. The procedure for testing this on hardware is [`docs/echo-cancellation-smoke-test.md`](./docs/echo-cancellation-smoke-test.md); no run has happened yet.
 

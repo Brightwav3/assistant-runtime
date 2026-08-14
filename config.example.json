@@ -26,8 +26,11 @@
   },
   "echoCancellation": {
     "enabled": true,
-    "processor": "auto",
+    "processor": "cancel_or_suppress",
     "tailMs": 400,
+    "suppressionGain": 0,
+    "bargeInMargin": 2,
+    "bargeInHoldMs": 800,
     "minErleDb": 6,
     "recoveryFrames": 25
   }

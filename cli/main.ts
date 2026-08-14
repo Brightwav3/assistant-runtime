@@ -53,6 +53,12 @@ async function main(): Promise<void> {
       let stopped = false;
       const stop = () => { if (stopped) return; stopped = true; void runtime.stop().finally(resolve); };
       process.once("SIGINT", stop); process.once("SIGTERM", stop);
+      // The assistant may ask to stop; the host honours it only after the model has
+      // confirmed with the user, and gives the goodbye a moment to finish playing.
+      void composition.shutdownRequested.then(({ reason }) => {
+        trace({ type: "runtime.shutdown.honoured", reason });
+        setTimeout(stop, 4_000).unref?.();
+      });
     });
   } else {
     json({ error: { code: "COMMAND_INVALID", message: "Use start [--json], health, capabilities, status, or memory." } });

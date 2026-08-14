@@ -40,7 +40,7 @@ test("production composition registers safe host tools for realtime discovery", 
   try {
     const tools = composition.components.find((component) => component.id === "tools");
     assert.ok(tools, "production composition must host the realtime tools runtime");
-    assert.deepEqual(await tools.capabilities!(), { tools: ["calculate", "get_time", "system_status", "uptime"] });
+    assert.deepEqual(await tools.capabilities!(), { tools: ["calculate", "end_conversation", "get_time", "system_status", "uptime"] });
     await composition.runtime.start();
     assert.equal((await composition.runtime.health()).components.tools?.state, "healthy");
   } finally {

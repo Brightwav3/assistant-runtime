@@ -102,8 +102,16 @@ export class ToolSystemToolClient implements ToolClient {
   }
 }
 
+export interface LifecycleRequest { action: "shutdown" | "restart"; reason: string; tool: string; }
+
 export class ToolSystemRealtimeToolExecutor implements RealtimeToolExecutor {
-  constructor(private readonly runtime: ToolRuntime) {}
+  /**
+   * `onLifecycle` is how a runtime transition leaves this bridge. Tool System
+   * deliberately does not act on a lifecycle outcome, so the host is handed the
+   * request and decides. Without the callback the request is simply reported to
+   * the model and nothing happens, which is the safe default.
+   */
+  constructor(private readonly runtime: ToolRuntime, private readonly onLifecycle?: (request: LifecycleRequest) => void) {}
 
   async discover(): Promise<RealtimeToolDeclaration[]> {
     return this.runtime.discover().map((declaration) => ({
@@ -118,6 +126,7 @@ export class ToolSystemRealtimeToolExecutor implements RealtimeToolExecutor {
       { tool: input.tool, args: toExecutionArguments(input.arguments), requestId: input.callId },
       input.signal,
     );
+    if (report.outcome.kind === "lifecycle") this.onLifecycle?.({ action: report.outcome.action, reason: report.outcome.reason, tool: input.tool });
     return {
       content: describeToolOutcome(report.outcome),
       ...(report.outcome.kind === "error" ? { isError: true } : {}),
@@ -144,7 +153,7 @@ function describeToolOutcome(outcome: Awaited<ReturnType<ToolRuntime["execute"]>
     case "continuation":
       return `Acknowledge briefly that this is in progress. The result will arrive separately. Do not invent it. (reference: ${outcome.continuationId})`;
     case "lifecycle":
-      return `The host was asked to ${outcome.action}: ${outcome.reason}. Nothing has happened yet.`;
+      return `The host was asked to ${outcome.action}: ${outcome.reason}. Say a short goodbye now and stop. Do not claim anything else has happened.`;
     case "error":
       return outcome.error.retryable
         ? `The action failed and may be retried: ${outcome.error.message}`

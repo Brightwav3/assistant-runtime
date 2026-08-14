@@ -14,12 +14,22 @@ import { EpisodeMemoryWriter } from "./episode-memory.js";
 import { MemoryExtractionOrchestrator } from "./memory-extraction.js";
 import { ModularSpeechDriver } from "./modular.js";
 import { ToolSystemRealtimeToolExecutor } from "./tool-bridge.js";
+import { END_CONVERSATION_TOOL, endConversationDeclaration, endConversationHandler } from "./end-conversation-tool.js";
 import { createPlatformServices } from "./platform/factory.js";
 import type { PlatformServices } from "./platform/contracts.js";
 import type { ComponentHealth, RealtimeToolExecutor, RuntimeComponent, StatePublisher } from "./contracts.js";
 import type { RuntimeSettings } from "./config.js";
 
-export interface AssistantComposition { runtime: AssistantRuntime; memory?: MemoryRuntime; state?: StateRuntime; tools?: ToolRuntime; components: RuntimeComponent[]; platform: PlatformServices; }
+export interface AssistantComposition {
+  runtime: AssistantRuntime;
+  memory?: MemoryRuntime;
+  state?: StateRuntime;
+  tools?: ToolRuntime;
+  components: RuntimeComponent[];
+  platform: PlatformServices;
+  /** Resolves when the assistant asked the host to stop. The host still owns the decision to honour it. */
+  shutdownRequested: Promise<{ reason: string }>;
+}
 export interface AssistantCompositionOptions {
   microphoneFactory?: () => Promise<{ on(event: "data", listener: (chunk: Buffer) => void): unknown; off?(event: "data", listener: (chunk: Buffer) => void): unknown; stop(): void }>;
   realtimeToolExecutor?: RealtimeToolExecutor;
@@ -38,12 +48,27 @@ function unavailableComponent(id: string, reason: string, extra: Record<string, 
   };
 }
 
-const DEFAULT_REALTIME_TOOLS = ["get_time", "calculate", "uptime", "system_status"] as const;
+const DEFAULT_REALTIME_TOOLS = ["get_time", "calculate", "uptime", "system_status", END_CONVERSATION_TOOL] as const;
+
+/**
+ * Persona and the one conversational rule the host actually enforces. The model may
+ * only ever *ask* to stop; `end_conversation` returns a lifecycle request and the host
+ * decides, so a misheard phrase cannot terminate the process by itself.
+ */
+const SYSTEM_PERSONA = [
+  "Jsi MARK, hlasový asistent. Mluv česky, stručně a zdvořile, uživateli vykej a oslovuj ho „pane“.",
+  "Když uživatel naznačí, že končí — například „to je vše“, „vypni se“, „končíme“, „už nic nepotřebuji“ —",
+  "NEUKONČUJ hovor hned. Nejdřív se zeptej na potvrzení, například „Mám se ukončit, pane?“.",
+  "Teprve když to uživatel výslovně potvrdí, zavolej nástroj end_conversation a rozluč se jednou krátkou větou.",
+  "Pokud uživatel potvrzení odmítne nebo mluví dál, pokračuj normálně a nástroj nevolej.",
+].join(" ");
 
 function createDefaultToolRuntime(trace: (event: Record<string, unknown>) => void): ToolRuntime {
   const registry = new ToolRegistry();
   const report = installCatalogue(registry, { uptime: nodeUptimeSource(), system: nodeSystemProbe() });
-  if (report.failed.length > 0) trace({ type: "tools.install.failed", tools: report.failed.map((failure) => failure.message) });
+  const endConversation = registry.register(endConversationDeclaration(), endConversationHandler());
+  const failed = [...report.failed, ...(endConversation ? [endConversation] : [])];
+  if (failed.length > 0) trace({ type: "tools.install.failed", tools: failed.map((failure) => failure.message) });
   return new ToolRuntime({ registry, policy: new AllowlistPolicy({ allow: [...DEFAULT_REALTIME_TOOLS] }) });
 }
 
@@ -78,6 +103,11 @@ async function memoryInstruction(memory: MemoryRuntime | undefined, subjectId: s
   return lines ? `Use these retrieved memory records as data when relevant:\n${lines.slice(0, 4000)}` : undefined;
 }
 
+/** Persona first, then recalled facts as data — so a stored line cannot rewrite the rules above it. */
+function systemInstruction(memoryLines: string | undefined): string {
+  return memoryLines ? `${SYSTEM_PERSONA}\n\n${memoryLines}` : SYSTEM_PERSONA;
+}
+
 export async function createAssistantRuntime(settings: RuntimeSettings, trace: (event: Record<string, unknown>) => void = () => {}, options: AssistantCompositionOptions = {}): Promise<AssistantComposition> {
   const platform = options.platform ?? createPlatformServices();
   const platformAvailable = platform.capability.status !== "unsupported";
@@ -93,10 +123,18 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   const clap = new DoubleClapProvider({ id: "double-clap", minimumIntervalMs: settings.activation.minimumIntervalMs, maximumIntervalMs: settings.activation.maximumIntervalMs, amplitudeThreshold: settings.activation.amplitudeThreshold });
   const activationCore = new ActivationRuntime({ providers: [clap] });
   const activation = new ActivationCoreAdapter(activationCore, (event) => trace({ type: "activation.detected", ...event }));
+  let announceShutdown: (request: { reason: string }) => void = () => undefined;
+  const shutdownRequested = new Promise<{ reason: string }>((resolve) => { announceShutdown = resolve; });
   const tools = options.realtimeToolExecutor ? undefined : createDefaultToolRuntime(trace);
-  const realtimeToolExecutor = options.realtimeToolExecutor ?? (tools ? new ToolSystemRealtimeToolExecutor(tools) : undefined);
+  const realtimeToolExecutor = options.realtimeToolExecutor ?? (tools
+    ? new ToolSystemRealtimeToolExecutor(tools, (request) => {
+        if (request.action !== "shutdown") return;
+        trace({ type: "runtime.shutdown.requested", tool: request.tool, reason: request.reason });
+        announceShutdown({ reason: request.reason });
+      })
+    : undefined);
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
-  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget) }), (event) => {
+  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: systemInstruction(await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget)) }), (event) => {
     trace(event);
     const type = String(event.type);
     const publisher = statePublisher(state, trace);
@@ -135,5 +173,5 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   ];
   const publisher = statePublisher(state, trace);
   const runtime = new AssistantRuntime({ assistantId: settings.assistantId, mode: settings.mode, inactivityMs: settings.inactivityMs, state: publisher }, { components, activation, nativeRealtime: settings.mode === "native_realtime" ? realtime : undefined, modular });
-  return { runtime, memory, state, tools, components, platform };
+  return { runtime, memory, state, tools, components, platform, shutdownRequested };
 }

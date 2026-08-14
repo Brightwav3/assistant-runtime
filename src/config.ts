@@ -7,7 +7,7 @@ export interface RuntimeSettings {
   mode: "native_realtime" | "modular";
   inactivityMs: number;
   activation: { provider: "double_clap"; sourceId: string; device?: string; minimumIntervalMs: number; maximumIntervalMs: number; amplitudeThreshold: number };
-  realtime: { provider: "gemini"; model?: string; inputSampleRate: number; outputSampleRate: number };
+  realtime: { provider: "gemini"; model?: string; voice?: string; inputSampleRate: number; outputSampleRate: number };
   memory: { enabled: boolean; path: string; scopeSubjectId: string; retrievalLimit?: number; retrievalTokenBudget?: number; episodeRetentionDays?: number };
   state: { enabled: boolean };
 }
@@ -53,7 +53,7 @@ const defaults: RuntimeSettings = {
   mode: "native_realtime",
   inactivityMs: 30_000,
   activation: { provider: "double_clap", sourceId: "local-default-microphone", minimumIntervalMs: 150, maximumIntervalMs: 700, amplitudeThreshold: 0.18 },
-  realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", inputSampleRate: 16_000, outputSampleRate: 24_000 },
+  realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
 };

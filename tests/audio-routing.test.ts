@@ -71,3 +71,33 @@ test("pending input keeps only the newest 500 ms and reports dropped frames", as
   assert.ok(events.some((event) => event.type === "realtime.input.metrics" && event.framesDropped === 5 && event.bufferedMs === 500));
   await session.close();
 });
+
+class FlushSession extends DelayedSession {
+  endAudioStreamCalls = 0;
+  override async endAudioStream(): Promise<void> { this.endAudioStreamCalls += 1; }
+}
+
+test("a paused microphone flushes the provider's held audio instead of stranding it", async () => {
+  // Break caught: the provider buffers captured audio until silence or an explicit
+  // end-of-stream. A microphone that stops mid-utterance left that audio unprocessed.
+  const session = new FlushSession();
+  const core = { connect: async () => session, capabilities: async () => ({}), health: async () => ({ status: "healthy", providerId: "fake" }) };
+  const adapter = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: { sampleRate: 16000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } });
+  const handle = await adapter.open();
+  await adapter.sendMicrophonePcm(new Int16Array(320));
+  assert.equal(session.endAudioStreamCalls, 0, "a still-streaming microphone must not be flushed");
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  assert.equal(session.endAudioStreamCalls, 1);
+  await handle.close();
+});
+
+test("closing the session cancels the pending capture flush", async () => {
+  const session = new FlushSession();
+  const core = { connect: async () => session, capabilities: async () => ({}), health: async () => ({ status: "healthy", providerId: "fake" }) };
+  const adapter = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: { sampleRate: 16000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } });
+  const handle = await adapter.open();
+  await adapter.sendMicrophonePcm(new Int16Array(320));
+  await handle.close();
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  assert.equal(session.endAudioStreamCalls, 0, "a closed session must not receive a late end-of-stream");
+});

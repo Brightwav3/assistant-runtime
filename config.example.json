@@ -12,6 +12,7 @@
   "realtime": {
     "provider": "gemini",
     "model": "gemini-3.1-flash-live-preview",
+    "voice": "Charon",
     "inputSampleRate": 16000,
     "outputSampleRate": 24000
   },

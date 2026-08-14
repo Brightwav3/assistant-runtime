@@ -27,6 +27,9 @@ export class ActivationCoreAdapter implements ActivationSource {
  */
 export { WINDOWS_PCM_PLAYER as PCM_PLAYER } from "./platform/windows-player.js";
 
+/** Matches the provider's documented "stream paused for more than a second" rule. */
+const CAPTURE_IDLE_FLUSH_MS = 1_000;
+
 export interface PcmPlaybackSink { write(chunk: Buffer): void; end(): void; abort(): void; }
 
 export class PcmPlaybackController {
@@ -89,6 +92,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private inputSendChain: Promise<void> = Promise.resolve();
   private inputFramesSent = 0;
   private inputFramesDropped = 0;
+  /** The provider holds captured audio until silence or an explicit end-of-stream; a paused microphone must not strand it. */
+  private captureIdleTimer?: NodeJS.Timeout;
   private toolRequested = 0;
   private toolCompleted = 0;
   private toolFailed = 0;
@@ -118,6 +123,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   async start(): Promise<void> {}
 
   async stop(): Promise<void> {
+    this.clearCaptureIdleFlush();
     await this.active?.close();
     this.active = undefined;
     this.opening = false;
@@ -209,6 +215,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
         if (event.type === "tool.requested") await this.handleToolRequest(session, event, input.signal);
         if (event.type === "session.closed" || event.type === "session.error") {
           if (this.active === session) this.active = undefined;
+          this.clearCaptureIdleFlush();
           this.onActivity = undefined;
           playback.close();
           emitPlaybackMetrics(event.timestampMs);
@@ -219,7 +226,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       this.trace({ type: "realtime.stream.ended", timestampMs: Date.now(), chunks });
     })();
 
-    const greeting = "Pozdrav uživatele stručně česky: Dobrý den, jsem připraven pomoci.";
+    // The Live API waits for input before it speaks, so the opening line is prompted, not spontaneous.
+    const greeting = "Pozdrav uživatele přesně touto větou a nic k ní nepřidávej: „Dobrý den, jsem MARK, jak vám mohu pomoci pane?“";
     try {
       await session.sendText(greeting);
       this.trace({ type: "realtime.greeting.sent", timestampMs: Date.now() });
@@ -231,6 +239,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     return {
       close: async () => {
         playback.close();
+        this.clearCaptureIdleFlush();
         if (this.active === session) this.active = undefined;
         this.opening = false;
         this.pendingFrames = [];
@@ -268,7 +277,27 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     await this.enqueueFrames(session, frames);
   }
 
+  /** One second of no captured frames counts as a paused stream, matching the provider's own buffering rule. */
+  private armCaptureIdleFlush(session: RealtimeSpeechSession): void {
+    if (this.captureIdleTimer) clearTimeout(this.captureIdleTimer);
+    if (!session.endAudioStream) return;
+    this.captureIdleTimer = setTimeout(() => {
+      this.captureIdleTimer = undefined;
+      if (this.active !== session) return;
+      void session.endAudioStream!()
+        .then(() => this.trace({ type: "realtime.input.stream_ended", timestampMs: Date.now() }))
+        .catch((error) => this.trace({ type: "realtime.input.stream_end_failed", timestampMs: Date.now(), message: this.redact(error instanceof Error ? error.message : String(error)) }));
+    }, CAPTURE_IDLE_FLUSH_MS);
+    this.captureIdleTimer.unref?.();
+  }
+
+  private clearCaptureIdleFlush(): void {
+    if (this.captureIdleTimer) clearTimeout(this.captureIdleTimer);
+    this.captureIdleTimer = undefined;
+  }
+
   private enqueueFrames(session: RealtimeSpeechSession, frames: Int16Array[]): Promise<void> {
+    this.armCaptureIdleFlush(session);
     for (const data of frames) {
       this.inputSendChain = this.inputSendChain.catch(() => undefined).then(async () => {
         if (this.active !== session) return;
@@ -338,6 +367,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     if ("text" in event) { traced.text = event.text; traced.source = event.source; }
     if ("code" in event) traced.code = event.code;
     if ("reason" in event) traced.reason = event.reason;
+    if ("timeLeftMs" in event) traced.timeLeftMs = event.timeLeftMs;
     this.trace(traced);
   }
 

@@ -12,7 +12,7 @@ const CAPTURE_FRAME = 320; // 20 ms
 const REFERENCE_CHUNK = 480; // 20 ms
 const ECHO_DELAY_SAMPLES = 3210; // ~200 ms, the Bluetooth range measured on the failing hardware
 
-const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, minErleDb: 6, recoveryFrames: 25 };
+const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "auto", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInThreshold: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 };
 
 /** Deterministic PRNG, so a failure reproduces identically. */
 function random(seed: number): () => number {
@@ -213,4 +213,61 @@ test("the recordings share one timeline, so they can be measured against each ot
   const firstSecond = reference.subarray(0, REFERENCE_RATE * 2);
   assert.ok(firstSecond.every((byte) => byte === 0), "the silent second must be padded, not skipped");
   assert.ok(reference.subarray(REFERENCE_RATE * 2).some((byte) => byte !== 0), "the played second must contain audio");
+});
+
+test("speech loud enough to be the user passes through a closed gate", () => {
+  // The gate cannot tell the user from the assistant. The microphone can: echo arrives
+  // attenuated by the room, near-end speech does not. Measured on real hardware, echo
+  // returned at a median frame peak of 105 against 3000-5000 for speech.
+  let clock = 3_000_000;
+  const guard = new EchoGuard(
+    { ...SETTINGS, processor: "gate", bargeInThreshold: 0.06, bargeInHoldMs: 200 },
+    CAPTURE_RATE,
+    REFERENCE_RATE,
+    () => {},
+    () => clock,
+  );
+  const played = toInt16(speechLike(REFERENCE_CHUNK, 21));
+  const quietEcho = new Int16Array(CAPTURE_FRAME).fill(105);
+  const loudSpeech = new Int16Array(CAPTURE_FRAME).fill(4000);
+  const push = () => guard.pushPlayback(played);
+
+  push();
+  assert.equal(peak(guard.processCapture(quietEcho)), 0, "echo-level capture stays suppressed");
+
+  // One loud frame is a transient, not an interruption.
+  push();
+  clock += 20;
+  assert.equal(peak(guard.processCapture(loudSpeech)), 0, "a single loud frame must not open the gate");
+
+  push();
+  clock += 20;
+  assert.ok(peak(guard.processCapture(loudSpeech)) > 0, "sustained near-end speech must reach the provider");
+
+  // The hold keeps a sentence intact rather than chopping it frame by frame.
+  push();
+  clock += 20;
+  assert.ok(peak(guard.processCapture(quietEcho)) > 0, "the hold keeps capture flowing");
+
+  // Once the hold expires and the room is quiet again, suppression resumes.
+  clock += 300;
+  push();
+  assert.equal(peak(guard.processCapture(quietEcho)), 0, "suppression resumes after the hold");
+});
+
+test("barge-in can be switched off, leaving the gate absolute", () => {
+  let clock = 4_000_000;
+  const guard = new EchoGuard(
+    { ...SETTINGS, processor: "gate", bargeInThreshold: 0 },
+    CAPTURE_RATE,
+    REFERENCE_RATE,
+    () => {},
+    () => clock,
+  );
+  const loud = new Int16Array(CAPTURE_FRAME).fill(12000);
+  for (let i = 0; i < 5; i += 1) {
+    guard.pushPlayback(toInt16(speechLike(REFERENCE_CHUNK, 22)));
+    assert.equal(peak(guard.processCapture(loud)), 0);
+    clock += 20;
+  }
 });

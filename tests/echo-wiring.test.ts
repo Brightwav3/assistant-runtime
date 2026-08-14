@@ -11,7 +11,7 @@ import type { EchoCancellationSettings } from "../src/config.js";
  * cancellation itself is covered in echo-cancellation.test.ts.
  */
 
-const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "gate", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, minErleDb: 6, recoveryFrames: 25 };
+const SETTINGS: EchoCancellationSettings = { enabled: true, processor: "gate", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInThreshold: 0, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 };
 const INPUT_FORMAT = { sampleRate: 16_000, channels: 1, sampleFormat: "pcm_s16le" as const, frameDurationMs: 20 };
 
 class FakeSession implements RealtimeSpeechSession {
@@ -74,6 +74,7 @@ test("capabilities say whether cancellation is on and what it costs", async () =
     tailMs: 400,
     maxDelayMs: 1_000,
     suppressionGain: 0,
+    bargeInThreshold: 0,
     minErleDb: 6,
     preservesFullDuplex: true,
     recording: false,

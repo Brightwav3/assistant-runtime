@@ -36,6 +36,9 @@ export class EchoGuard {
   /** Consecutive suppressing frames the adaptive filter has looked healthy for. */
   private healthyStreak = 0;
   private usingGate = false;
+  /** Host-clock time until which a barge-in keeps capture flowing through a closed gate. */
+  private bargeInUntilMs = 0;
+  private loudFrames = 0;
   private framesProcessed = 0;
   private recorders?: { reference: WriteStream; capture: WriteStream; cleaned: WriteStream };
   /**
@@ -111,7 +114,7 @@ export class EchoGuard {
     const gate = this.gate?.process(frame);
     this.framesProcessed += 1;
 
-    const cleaned = this.choose(adaptive?.data, gate?.data) ?? data;
+    const cleaned = this.choose(adaptive?.data, gate?.data, data, frame.timestampMs) ?? data;
     if (this.recorders) {
       const written = this.recordAligned(this.recorders.capture, frame.timestampMs, this.captureSamplesWritten, this.captureSampleRate, data);
       this.recordAligned(this.recorders.cleaned, frame.timestampMs, this.captureSamplesWritten, this.captureSampleRate, cleaned);
@@ -129,15 +132,23 @@ export class EchoGuard {
    * to the adaptive output needs a sustained healthy reading rather than a single frame,
    * because one good block during a pause in the assistant's speech is not convergence.
    */
-  private choose(adaptive: Int16Array | undefined, gate: Int16Array | undefined): Int16Array | undefined {
+  private choose(
+    adaptive: Int16Array | undefined,
+    gate: Int16Array | undefined,
+    captured: Int16Array,
+    timestampMs: number,
+  ): Int16Array | undefined {
     if (!gate) return adaptive;
-    if (!adaptive) return gate;
 
     const gateMetrics = this.gate!.metrics();
     if (!gateMetrics.gateSuppressing) {
       this.usingGate = false;
-      return adaptive;
+      this.loudFrames = 0;
+      return adaptive ?? captured;
     }
+
+    if (this.isBargingIn(captured, timestampMs)) return adaptive ?? captured;
+    if (!adaptive) return gate;
 
     const metrics = this.adaptive!.metrics();
     const healthy = metrics.state === "converged" && metrics.erleDb >= this.settings.minErleDb;
@@ -170,6 +181,38 @@ export class EchoGuard {
     return at + data.length;
   }
 
+  /**
+   * Whether this frame is too loud to be echo.
+   *
+   * The gate cannot tell the user from the assistant, but the microphone can: the echo
+   * arrives attenuated by the room while the user is next to the microphone. Two consecutive
+   * loud frames open a hold, so a single transient — a door, a keyboard — does not let a
+   * whole utterance of echo through, and the hold keeps a sentence from being chopped up
+   * once it has.
+   */
+  private isBargingIn(captured: Int16Array, timestampMs: number): boolean {
+    if (this.settings.bargeInThreshold <= 0) return false;
+    if (timestampMs < this.bargeInUntilMs) return true;
+
+    let peak = 0;
+    for (let i = 0; i < captured.length; i += 1) {
+      const magnitude = Math.abs(captured[i]);
+      if (magnitude > peak) peak = magnitude;
+    }
+    if (peak / 32768 < this.settings.bargeInThreshold) {
+      this.loudFrames = 0;
+      return false;
+    }
+
+    this.loudFrames += 1;
+    if (this.loudFrames < 2) return false;
+    if (timestampMs >= this.bargeInUntilMs) {
+      this.trace({ type: "echo.bargein", timestampMs, peak: Number((peak / 32768).toFixed(3)) });
+    }
+    this.bargeInUntilMs = timestampMs + this.settings.bargeInHoldMs;
+    return true;
+  }
+
   /** What this guard is configured to do, readable before a session exists. */
   describe(): Record<string, unknown> {
     return {
@@ -177,6 +220,7 @@ export class EchoGuard {
       tailMs: this.settings.tailMs,
       maxDelayMs: this.settings.maxDelayMs,
       suppressionGain: this.settings.suppressionGain,
+      bargeInThreshold: this.settings.bargeInThreshold,
       minErleDb: this.settings.minErleDb,
       preservesFullDuplex: this.settings.processor !== "gate",
       recording: Boolean(this.settings.recordDir),
@@ -242,6 +286,8 @@ export class EchoGuard {
     this.healthyStreak = 0;
     this.framesProcessed = 0;
     this.usingGate = this.settings.processor === "gate";
+    this.bargeInUntilMs = 0;
+    this.loudFrames = 0;
   }
 }
 

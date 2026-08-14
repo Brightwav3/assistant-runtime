@@ -160,9 +160,13 @@ const defaults: RuntimeSettings = {
     provider: "gemini",
     // Pinned, not a `-latest` alias: an alias can change model under a running system,
     // which would make a trace or a failure impossible to reproduce afterwards.
-    // Verified 2026-08-14 to exist and to support function declarations; note that
-    // gemini-2.5-flash now 404s for new API keys.
-    model: "gemini-3.5-flash",
+    //
+    // Measured 2026-08-14 on the robot/submarine recall: the lite model completed the
+    // same search-view-answer loop in 2.4 s against 18.9 s for gemini-3.5-flash, with
+    // the same candidate. In a half-duplex voice conversation that difference is the
+    // whole feature — sixteen seconds of silence reads as a hang, not as thinking.
+    // (gemini-2.5-flash now 404s for new API keys and cannot be used at all.)
+    model: "gemini-3.5-flash-lite",
     fallbackModels: [],
     deadlineMs: 45_000,
     maximumModelCalls: 6,

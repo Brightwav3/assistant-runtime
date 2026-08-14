@@ -111,6 +111,12 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private toolCancelled = 0;
   private readonly sessionListeners = new Set<(session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void>();
 
+  /**
+   * Reports that something the inactivity timer cannot see is still happening — a
+   * delegation running in the background looks exactly like silence from here.
+   */
+  signalActivity(): void { this.onActivity?.(); }
+
   /** Notifies a consumer each time a provider session opens, with the provider's capabilities. */
   onSession(listener: (session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void): () => void {
     this.sessionListeners.add(listener);

@@ -132,12 +132,16 @@ async function memoryInstruction(memory: MemoryRuntime | undefined, subjectId: s
  * one that matters — an acknowledgement is only honest if it is not also an answer.
  */
 const DELEGATION_INSTRUCTION = [
-  "Nemáš přímý přístup k paměti uživatele.",
+  "Nemáš přímý přístup k paměti uživatele a NEMÁŠ žádné vzpomínky ve svém kontextu.",
   "Kdykoli se uživatel ptá na něco, co jste probírali dřív, na uloženou vzpomínku, projekt, osobu nebo dřívější rozhodnutí,",
   "zavolej nástroj intelligence_delegate a do parametru goal napiš česky, co je potřeba zjistit.",
-  "Nástroj se vrátí okamžitě a neobsahuje odpověď. Krátce a přirozeně potvrď, že se na to díváš, a klidně pokračuj v hovoru.",
-  "Výsledek dorazí později jako oddělený DELEGATION RESULT — teprve z něj formuluj odpověď.",
-  "Nikdy si odpověď nevymýšlej a nikdy netvrď, že si něco pamatuješ, dokud výsledek nedorazí.",
+  "Nástroj se vrátí okamžitě a NEOBSAHUJE odpověď.",
+  "Poté řekni JEDNU krátkou větu, že se na to díváš, například „Moment, podívám se.“ — a pak už na to téma mlč.",
+  "ABSOLUTNÍ PRAVIDLO: dokud nedorazí zpráva označená DELEGATION RESULT, neuveď žádný konkrétní údaj o minulé konverzaci.",
+  "Žádné názvy, žádná témata, žádné detaily, ani jako odhad, ani jako příklad, ani jako otázku typu „myslel jste X?“.",
+  "Když si nejsi jistý, co uživatel myslí, počkej na výsledek — neptej se na možnosti, které sis vymyslel.",
+  "Vymyšlený detail je horší než ticho: uživatel ti věří, že mluvíš z jeho paměti.",
+  "Odpověz teprve z obsahu DELEGATION RESULT. Pokud v něm nic není, řekni přímo, že jsi nic nenašel.",
 ].join(" ");
 
 /**
@@ -283,6 +287,12 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
+    // `when_idle` is only meaningful if something tells the scheduler when the assistant
+    // is speaking. Without this it delivered immediately and could cut into a sentence.
+    if (delegation && activeSessionId) {
+      if (type === "realtime.output.audio_started") delegation.delivery.markOutputStarted(activeSessionId);
+      if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void delegation.delivery.markOutputFinished(activeSessionId);
+    }
   }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player, echo, onInputFrame, stopInputTranscription);
 
   if (delegation) {
@@ -293,6 +303,12 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       const contextInjection = capabilities.providers[0]?.contextInjection ?? false;
       trace({ type: "delegation.session.bound", sessionId: session.id, contextInjection });
       void delegation.delivery.rebind({ sessionId: session.id, session, contextInjection });
+    });
+    // Background work is activity. Without this the inactivity timer sees a quiet
+    // session, closes it mid-delegation, and the answer the user is waiting for is
+    // cancelled before it can be spoken.
+    delegation.broker.onEvent((event) => {
+      if (event.type === "delegation.created" || event.type === "delegation.progress" || event.type === "delegation.completed") realtime.signalActivity();
     });
   }
   const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, memoryRetrieval: { limit: settings.memory.retrievalLimit, tokenBudget: settings.memory.retrievalTokenBudget }, trace }) : undefined;

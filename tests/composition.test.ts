@@ -50,6 +50,21 @@ test("production composition registers safe host tools for realtime discovery", 
   }
 });
 
+test("heard debug mode adds only the opt-in recording tool", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-heard-debug-"));
+  const composition = await createAssistantRuntime({
+    ...settingsFor(join(directory, "memory.sqlite")),
+    debug: { heard: true, path: join(directory, "heard.jsonl") },
+  }, undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });
+  try {
+    const tools = composition.tools!.discover().map((tool) => tool.name).sort();
+    assert.deepEqual(tools, ["calculate", "end_conversation", "get_time", "record_heard", "system_status", "uptime"]);
+  } finally {
+    await composition.runtime.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("modular mode exposes a real Scribe/Intelligence/Voice capability boundary", async () => {
   const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-modular-"));
   const composition = await createAssistantRuntime({ ...settingsFor(join(directory, "memory.sqlite")), mode: "modular" }, undefined, { microphoneFactory: async () => ({ on() {}, off() {}, stop() {} }) });

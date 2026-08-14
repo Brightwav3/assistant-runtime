@@ -378,7 +378,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     let result: { content: string; isError?: boolean };
     let executionFailed = false;
     try {
-      result = this.toolExecutor ? await this.toolExecutor.execute({ callId: event.callId, tool: event.tool, arguments: event.arguments, signal }) : { content: "No realtime tool executor is configured.", isError: true };
+      result = this.toolExecutor ? await this.toolExecutor.execute({ callId: event.callId, tool: event.tool, arguments: event.arguments, sessionId: session.id, signal }) : { content: "No realtime tool executor is configured.", isError: true };
     } catch (error) {
       if (signal?.aborted || this.active !== session) {
         this.toolCancelled += 1;

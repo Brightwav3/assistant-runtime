@@ -35,8 +35,13 @@ literal token `ano` before honouring a shutdown would have made shutdown impossi
 against a transcript spelling it `あの`. The transcript is a lossy rendering of what
 the model heard, and consent logic must not be built on its spelling.
 
-The real cost is downstream: episode memory stores these transcripts, so a session
-without a language hint writes stored conversation text in the wrong script.
+The real cost is downstream: baseline episode memory stores these transcripts, so
+a session without a language hint can write stored conversation text in the wrong
+script. The runtime now also has an opt-in `debug.heard` path that asks the model
+to write a per-run `heard-YYYYMMDD-HHmm.jsonl` record. When enabled, its `meaning`
+replaces the provider input transcript for episode and semantic-memory extraction;
+the provider transcript remains visible for diagnostics and `verbatim` remains
+auditable evidence.
 
 There is no fix available on this model. `AudioTranscriptionConfig.languageCodes`
 exists in the SDK types and looks like the answer, but the Live API rejects it —
@@ -46,9 +51,11 @@ session. The trade is not a worse transcript against a better one; it is a wrong
 script against no assistant. Reportedly Live 2.5 accepts it, which is not a reason
 to move backwards.
 
-**Open limitation:** stored episode transcripts may contain phonetically correct
-text in the wrong script. Delegated recall is unaffected — it reads memory records,
-not raw transcripts — but anything built on stored transcript text should expect it.
+**Open limitation:** the provider transcript may still contain phonetically correct
+text in the wrong script, and the model-derived `meaning` can itself be uncertain.
+`debug.heard` is therefore an evidence-and-memory path, not a replacement for raw
+ASR. Delegated recall remains bounded by Memory Core and reads accepted memory
+records, not raw provider transcripts.
 
 Capabilities are deliberately under-claimed where unverified. Over-claiming
 `toolCalling: "async"` would make the runtime skip its degraded path and drop a

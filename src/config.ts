@@ -12,9 +12,15 @@ export interface RuntimeSettings {
   inputTranscription: { enabled: boolean; language: string; cliPath?: string; modelPath?: string; threads?: number };
   memory: { enabled: boolean; path: string; scopeSubjectId: string; retrievalLimit?: number; retrievalTokenBudget?: number; episodeRetentionDays?: number };
   state: { enabled: boolean };
+  debug?: DebugSettings;
   echoCancellation: EchoCancellationSettings;
   delegation: DelegationSettings;
   usage: UsageSettings;
+}
+
+export interface DebugSettings {
+  heard: boolean;
+  path: string;
 }
 
 /**
@@ -154,6 +160,7 @@ const defaults: RuntimeSettings = {
   inputTranscription: { enabled: true, language: "cs" },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
+  debug: { heard: false, path: "..\\.runtime\\heard.jsonl" },
   echoCancellation: { enabled: true, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 2, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
   delegation: {
     enabled: false,
@@ -189,6 +196,7 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
     inputTranscription: { ...defaults.inputTranscription, ...(raw.inputTranscription ?? {}) },
     memory: { ...defaults.memory, ...(raw.memory ?? {}) },
     state: { ...defaults.state, ...(raw.state ?? {}) },
+    debug: { heard: raw.debug?.heard ?? defaults.debug!.heard, path: raw.debug?.path ?? defaults.debug!.path },
     echoCancellation: { ...defaults.echoCancellation, ...(raw.echoCancellation ?? {}) },
     delegation: { ...defaults.delegation, ...(raw.delegation ?? {}) },
     usage: { ...defaults.usage, ...(raw.usage ?? {}) },
@@ -197,6 +205,7 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   if (settings.mode !== "native_realtime" && settings.mode !== "modular") throw new Error("mode must be native_realtime or modular.");
   if (settings.memory.enabled && !settings.memory.path) throw new Error("memory.path is required when memory is enabled.");
   if (settings.memory.enabled && !isAbsolute(settings.memory.path)) settings.memory.path = resolve(basePath, settings.memory.path);
+  if (settings.debug && !isAbsolute(settings.debug.path)) settings.debug.path = resolve(basePath, settings.debug.path);
   const echo = settings.echoCancellation;
   if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "cancel_or_suppress") throw new Error("echoCancellation.processor must be adaptive, gate, or cancel_or_suppress.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");

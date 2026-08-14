@@ -66,6 +66,25 @@ Copy `config.example.json` to ignored `config.json`, copy `.env.example` to `.en
 compact human-readable console by default; add `--json` for the full event
 stream. `start` runs until `SIGINT` or `SIGTERM`.
 
+## Heard evidence and memory extraction
+
+For microphone debugging, set `debug.heard` to `true` in the ignored
+`config.json`. The realtime model then calls `record_heard` once per user turn.
+Each runtime start reserves a separate file under `.runtime` named
+`heard-YYYYMMDD-HHmm.jsonl`; a same-minute collision receives a numeric suffix.
+Records contain `heard_id`, `session_id`, the model's `verbatim` rendering,
+its `meaning`, detected `language`, and `uncertain_parts` so a run can be
+audited without storing raw audio.
+
+When this mode is enabled, the memory pipeline uses the `meaning` from
+`record_heard` as the user turn and ignores the provider's `transcript.final`
+input for episode and semantic-memory extraction. `verbatim` remains diagnostic
+evidence, not the canonical memory text. At session close, the configured
+delegation model may propose memory candidates; Memory Core still decides
+whether each candidate is stored, confirmed, kept as episode-only context, or
+discarded. The feature is opt-in and model-derived: it improves the wrong-script
+problem, but it is not a raw speech-recognition transcript.
+
 ## Public API
 
 `AssistantRuntime` owns lifecycle, deterministic component order, interaction orchestration, cancellation, inactivity cleanup, aggregated health/capabilities, and State Core publication. `createAssistantRuntime()` composes configured activation, microphone, native realtime, SQLite memory, State Core, and safe read-only Host Tools components. The default realtime declarations are `get_time`, `calculate`, `uptime`, and `system_status`; callers can pass a `RealtimeToolExecutor` through `AssistantCompositionOptions` to replace that catalogue. Side-effecting tools such as `open_app` are not created by default.
@@ -84,7 +103,7 @@ Activation keeps receiving raw capture — a double clap is not echo and must st
 
 ## Boundaries
 
-This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It does not implement echo cancellation either; it composes AEC System's public contract. It composes their public contracts and automatically stores compact input/output conversation summaries through Memory Core; raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
+This repository does not implement activation detection, microphone capture, STT, TTS, model reasoning, state storage, provider protocols, or device networking. It does not implement echo cancellation either; it composes AEC System's public contract. It composes their public contracts and stores conversation episodes through Memory Core; when delegated extraction is enabled, semantic-memory candidates are proposed by the separately configured reasoning model and accepted or rejected by the memory pipeline. Raw audio and full audio archives are not stored. The realtime adapter frameizes native input into 20 ms PCM frames and discovers/executes the active Tool System catalogue without duplicating its policy boundary. The CLI can still add durable facts, preferences, and instructions explicitly.
 
 ## Diagnostics
 

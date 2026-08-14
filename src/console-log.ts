@@ -68,7 +68,7 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
 
     if (type === "realtime.transcript.final" && event.source === "input") {
       const text = asText(event.text).trim();
-      if (text) print(`Ty: ${text}`);
+      if (text) print(`Slyšel jsem: ${text}`);
       return;
     }
 

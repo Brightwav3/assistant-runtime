@@ -12,7 +12,7 @@ export interface ActivationSource extends RuntimeComponent { subscribe(handler: 
 export interface NativeRealtimeDriver { open(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<{ close(): Promise<void>; done: Promise<void> }> }
 export interface RealtimeToolExecutor {
   discover(): Promise<RealtimeToolDeclaration[]>;
-  execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }>;
+  execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; sessionId?: string; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }>;
 }
 export interface ModularDriver { run(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<void> }
 export interface StatePublisher { set(input: { key: string; value: string | boolean; source: { sourceType: "system"; sourceId: string } }): Promise<unknown> }

@@ -7,8 +7,19 @@ export interface EpisodeMemoryWriterOptions {
   episodes: EpisodeRuntime;
   subjectId: string;
   outputTranscriptMode?: "delta" | "cumulative";
+  /** In diagnostic heard mode, the model reconstruction is the only user-turn source. */
+  preferHeardInput?: boolean;
   extractor?: MemoryExtractionOrchestrator;
   trace?: (event: Record<string, unknown>) => void;
+}
+
+export interface HeardInput {
+  heardId: string;
+  sessionId: string;
+  verbatim: string;
+  meaning: string;
+  language: string;
+  uncertainParts: string[];
 }
 
 /**
@@ -28,11 +39,18 @@ export function assessTranscript(input: { text: string; isFirstUserTurn: boolean
   return input.text.trim().length < MINIMUM_RELIABLE_TRANSCRIPT_LENGTH ? "unreliable" : "reliable";
 }
 
+export function assessHeardInput(input: Pick<HeardInput, "meaning" | "verbatim" | "uncertainParts">): "reliable" | "unreliable" {
+  const text = input.meaning.trim() || input.verbatim.trim();
+  if (input.uncertainParts.length > 0 || text.length < MINIMUM_RELIABLE_TRANSCRIPT_LENGTH) return "unreliable";
+  return "reliable";
+}
+
 /** Converts realtime lifecycle events into bounded textual episode records. Raw audio is never accepted. */
 export class EpisodeMemoryWriter {
   private readonly episodes: EpisodeRuntime;
   private readonly subjectId: string;
   private readonly outputTranscriptMode: "delta" | "cumulative";
+  private readonly preferHeardInput: boolean;
   private readonly extractor?: MemoryExtractionOrchestrator;
   private readonly trace: (event: Record<string, unknown>) => void;
   private readonly pendingOutput = new Map<string, { turnId: string; text: string }>();
@@ -46,12 +64,18 @@ export class EpisodeMemoryWriter {
     this.episodes = options.episodes;
     this.subjectId = options.subjectId;
     this.outputTranscriptMode = options.outputTranscriptMode ?? "delta";
+    this.preferHeardInput = options.preferHeardInput ?? false;
     this.extractor = options.extractor;
     this.trace = options.trace ?? (() => {});
   }
 
   public handle(event: RealtimeSpeechEvent): Promise<void> {
     this.queue = this.queue.then(() => this.process(event));
+    return this.queue;
+  }
+
+  public handleHeard(input: HeardInput): Promise<void> {
+    this.queue = this.queue.then(() => this.processHeard(input));
     return this.queue;
   }
 
@@ -71,6 +95,10 @@ export class EpisodeMemoryWriter {
       return;
     }
     if (event.type === "transcript.final" && event.source === "input") {
+      if (this.preferHeardInput) {
+        this.trace({ type: "memory.transcript.ignored", sessionId, reason: "heard_model_source_enabled" });
+        return;
+      }
       await this.ensureSession(sessionId);
       const isFirstUserTurn = !this.sessionsWithUserTurn.has(sessionId);
       this.sessionsWithUserTurn.add(sessionId);
@@ -107,6 +135,26 @@ export class EpisodeMemoryWriter {
     }
     if (event.type === "session.closed" || event.type === "session.error") {
       await this.finish(sessionId, event.type === "session.error" ? "failed" : "completed");
+    }
+  }
+
+  private async processHeard(input: HeardInput): Promise<void> {
+    const text = input.meaning.trim() || input.verbatim.trim();
+    if (!text || this.closedSessions.has(input.sessionId)) return;
+    await this.ensureSession(input.sessionId);
+    const transcriptConfidence = assessHeardInput(input);
+    const turn = await this.episodes.appendTurn(input.sessionId, {
+      speaker: "user",
+      text,
+      status: "complete",
+      sourceEventId: input.heardId,
+      transcriptConfidence,
+    });
+    if (!turn) return;
+    this.sessionsWithUserTurn.add(input.sessionId);
+    this.recordTurn(input.sessionId, turn.turnId, "user", turn.text, turn.status, transcriptConfidence);
+    if (transcriptConfidence === "unreliable") {
+      this.trace({ type: "memory.transcript.unreliable", sessionId: input.sessionId, turnId: turn.turnId, source: "heard", uncertainParts: input.uncertainParts });
     }
   }
 

@@ -181,10 +181,17 @@ Hardware run, 2026-08-14, Gemini Live voice with `gemini-3.5-flash-lite` delegat
 - a follow-up question delegated again and answered from the same record;
 - end-to-end delegation latency was roughly two seconds.
 
-Observed defect from that run, not yet fixed: an unintelligible utterance transcribed
-as `あの` was treated as confirmation for `end_conversation`. The host-side guarantee
-held — the model may only ask, and the host decides — but the model's reading of
-consent is too loose, and a garbled sound should not end a session.
+One finding from that run: a spoken Czech "ano" was transcribed as `あの` — hiragana
+*a-no*, phonetically correct but in the script of a language the provider guessed,
+because no language hint was being sent. The model understood the confirmation and
+`end_conversation` behaved correctly; only the written transcript was wrong.
+
+The cost is downstream rather than conversational: episode memory stores these
+transcripts, so conversation text can be written in the wrong script. This is an open
+limitation with no fix on the current model — `AudioTranscriptionConfig.languageCodes`
+is declared in the SDK but rejected by the Live API, verified 2026-08-14 against
+`gemini-3.1-flash-live-preview`, which refuses to open the session at all. Delegated
+recall is unaffected, since it reads memory records rather than raw transcripts.
 
 What is deliberately still unverified:
 

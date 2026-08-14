@@ -22,13 +22,33 @@ session, and not a speaker.
 | Gemini live tool calling is non-blocking | — | UNVERIFIED — claimed as `blocking` on purpose |
 | Gemini native result scheduling | — | UNVERIFIED — claimed as `false` on purpose |
 
-### Observed defect, not yet fixed
+### Read the transcript, not the script
 
-In the same run, an unintelligible utterance transcribed as `あの` was accepted as
-confirmation for `end_conversation`, and the assistant shut down. The persona
-requires an explicit confirmation and this was not one. The host-side guarantee held
-— the model only ever *asked*, and the host honoured it — but the model's reading of
-consent is too loose. A garbled sound should not end the session.
+In the same run, a spoken Czech "ano" was transcribed as `あの` — hiragana *a-no*.
+The provider had no language hint, so it rendered a phonetically correct
+transcription in the script of a language it guessed. The model understood the
+confirmation perfectly and `end_conversation` was correct; only the written form
+was wrong.
+
+This is worth stating because the obvious "fix" is actively harmful: requiring the
+literal token `ano` before honouring a shutdown would have made shutdown impossible
+against a transcript spelling it `あの`. The transcript is a lossy rendering of what
+the model heard, and consent logic must not be built on its spelling.
+
+The real cost is downstream: episode memory stores these transcripts, so a session
+without a language hint writes stored conversation text in the wrong script.
+
+There is no fix available on this model. `AudioTranscriptionConfig.languageCodes`
+exists in the SDK types and looks like the answer, but the Live API rejects it —
+verified 2026-08-14 against `gemini-3.1-flash-live-preview`, which throws
+`languageCodes parameter is not supported in Gemini API` and never opens the
+session. The trade is not a worse transcript against a better one; it is a wrong
+script against no assistant. Reportedly Live 2.5 accepts it, which is not a reason
+to move backwards.
+
+**Open limitation:** stored episode transcripts may contain phonetically correct
+text in the wrong script. Delegated recall is unaffected — it reads memory records,
+not raw transcripts — but anything built on stored transcript text should expect it.
 
 Capabilities are deliberately under-claimed where unverified. Over-claiming
 `toolCalling: "async"` would make the runtime skip its degraded path and drop a

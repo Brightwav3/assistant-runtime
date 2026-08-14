@@ -158,7 +158,11 @@ const defaults: RuntimeSettings = {
   delegation: {
     enabled: false,
     provider: "gemini",
-    model: "gemini-2.5-flash",
+    // Pinned, not a `-latest` alias: an alias can change model under a running system,
+    // which would make a trace or a failure impossible to reproduce afterwards.
+    // Verified 2026-08-14 to exist and to support function declarations; note that
+    // gemini-2.5-flash now 404s for new API keys.
+    model: "gemini-3.5-flash",
     fallbackModels: [],
     deadlineMs: 45_000,
     maximumModelCalls: 6,

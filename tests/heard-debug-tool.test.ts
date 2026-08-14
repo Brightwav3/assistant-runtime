@@ -13,9 +13,11 @@ test("creates a unique timestamped heard file for each run", async () => {
 
   const first = await createRunHeardPath(basePath, now);
   const second = await createRunHeardPath(basePath, now);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
 
-  assert.match(first, /heard-20260814-2117\.jsonl$/);
-  assert.match(second, /heard-20260814-2117-02\.jsonl$/);
+  assert.match(first, new RegExp(`heard-${stamp}\\.jsonl$`));
+  assert.match(second, new RegExp(`heard-${stamp}-02\\.jsonl$`));
 });
 
 test("record_heard appends a bounded diagnostic record with the realtime session", async () => {

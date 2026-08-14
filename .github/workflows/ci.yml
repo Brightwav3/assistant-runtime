@@ -47,7 +47,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: Brightwav3/tool-system
-          ref: main
+          # The runtime records the live session correlation supplied by this
+          # branch; keep the dependency explicit until the sibling PR lands.
+          ref: agent/session-context
           path: tool-system
       - uses: actions/checkout@v7
         with:

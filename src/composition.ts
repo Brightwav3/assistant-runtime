@@ -140,7 +140,16 @@ const DELEGATION_INSTRUCTION = [
   "Nikdy si odpověď nevymýšlej a nikdy netvrď, že si něco pamatuješ, dokud výsledek nedorazí.",
 ].join(" ");
 
-/** Persona first, then recalled facts as data — so a stored line cannot rewrite the rules above it. */
+/**
+ * Persona first, then recalled facts as data — so a stored line cannot rewrite the rules
+ * above it.
+ *
+ * When delegation is on, `memoryLines` is deliberately omitted by the caller. Pre-loading
+ * memories into the voice model's prompt lets it answer from the prompt instead of
+ * delegating — which not only wastes the lookup but *masks a broken one*: a failing
+ * delegation still produced a confident, correct-sounding answer, so the failure was
+ * invisible until the trace was read.
+ */
 function systemInstruction(memoryLines: string | undefined, delegationEnabled = false): string {
   const persona = delegationEnabled ? `${SYSTEM_PERSONA} ${DELEGATION_INSTRUCTION}` : SYSTEM_PERSONA;
   return memoryLines ? `${persona}\n\n${memoryLines}` : persona;
@@ -266,7 +275,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     void inputTranscriber.push(frame).catch((error) => trace({ type: "realtime.input_transcription.frame_failed", timestampMs: Date.now(), sessionId, message: redact(error) }));
   } : undefined;
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
-  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, inputTranscription: inputTranscriber ? false : undefined, systemInstruction: systemInstruction(await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget), delegation !== undefined) }), (event) => {
+  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, inputTranscription: inputTranscriber ? false : undefined, systemInstruction: systemInstruction(delegation ? undefined : await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget), delegation !== undefined) }), (event) => {
     trace(event);
     const type = String(event.type);
     const publisher = statePublisher(state, trace);

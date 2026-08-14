@@ -44,6 +44,32 @@ interface TrackedDelegation {
   terminal: boolean;
 }
 
+/**
+ * Reads a delegation result out of whatever the model actually produced.
+ *
+ * A text model returns text, even when it is returning JSON — and it commonly wraps that
+ * JSON in a markdown fence. Requiring a `structured` output meant every real delegation
+ * failed while the scripted test passed, so text is parsed here too. What is *not*
+ * relaxed is validation: prose that is not a delegation result is still refused, because
+ * the voice model must never be handed something unvalidated to narrate.
+ */
+export function readDelegationOutput(output: { type: "text"; text: string } | { type: "structured"; value: Record<string, unknown> }): DelegationStructuredResult | undefined {
+  if (output.type === "structured") return parseDelegationResult(output.value);
+  const text = output.text.trim();
+  // ```json … ``` or ``` … ```
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  const candidate = fenced?.[1] ?? text;
+  // A model sometimes adds a sentence around the object; take the outermost braces.
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    return parseDelegationResult(JSON.parse(candidate.slice(start, end + 1)));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Validates the terminal output actually is a delegation result rather than prose that looks like one. */
 export function parseDelegationResult(value: unknown): DelegationStructuredResult | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -142,7 +168,7 @@ export class RuntimeDelegationBroker implements DelegationBroker {
       const usage = result.usage;
       this.emit({ type: "delegation.progress", ...base, modelCalls: usage.model_calls ?? 0, toolCalls: usage.tool_calls ?? 0, occurredAt: this.clock() });
 
-      const structured = result.outputs.map((output) => (output.type === "structured" ? parseDelegationResult(output.value) : undefined)).find(Boolean);
+      const structured = result.outputs.map((output) => readDelegationOutput(output)).find(Boolean);
       if (!structured) {
         // Prose is not a delegation result. Accepting it here would let the voice model
         // narrate a shape nothing validated.

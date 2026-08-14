@@ -91,6 +91,12 @@ System's PROGRESS for that measurement.
 **The threshold is empirical.** It is tuned to this microphone, this speaker, and
 this room, and it is the first thing to re-check on any other.
 
+**The recordings those measurements came from were deleted on 2026-08-14**, at
+the owner's request — four sessions, 37 MB of real conversation. The numbers
+survive in this file and in AEC System's PROGRESS; the audio does not, so none of
+them can be re-derived or re-checked against different settings. Recording is
+still available through `echoCancellation.recordDir` and is off by default.
+
 Integrating also found a gap in AEC System's contract — a host that aborts
 playback must be able to retract the reference it already pushed — which was
 fixed there rather than worked around here.

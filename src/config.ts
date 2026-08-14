@@ -1,3 +1,4 @@
+import type { ModelPriceEntry } from "intelligence-core";
 import { readFile } from "node:fs/promises";
 import { access } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
@@ -45,6 +46,12 @@ export interface UsageSettings {
   unknownCostPolicy: "allow" | "warn" | "block";
   priceCatalogVersion: string;
   maximumCost?: number;
+  /**
+   * Model prices, supplied as configuration rather than baked into provider code so a
+   * recorded cost can always be traced back to the numbers that produced it. Empty means
+   * costs are simply unknown — which `unknownCostPolicy` then decides what to do about.
+   */
+  priceCatalog?: ModelPriceEntry[];
 }
 
 export interface EchoCancellationSettings {

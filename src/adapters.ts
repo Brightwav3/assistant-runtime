@@ -1,5 +1,5 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
-import { REALTIME_INPUT_FORMAT, RealtimeCore, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
+import { REALTIME_INPUT_FORMAT, RealtimeCore, type AudioFrame, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
 import { IntelligenceRuntime } from "intelligence-core";
 import { VoiceRuntime } from "voice-core";
 import { spawn } from "node:child_process";
@@ -99,6 +99,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private pendingFrames: Int16Array[] = [];
   private onActivity?: () => void;
   private readonly frameizer = new PcmInputFrameizer();
+  private inputFrameTimestampMs = Date.now();
   private inputSendChain: Promise<void> = Promise.resolve();
   private inputFramesSent = 0;
   private inputFramesDropped = 0;
@@ -108,6 +109,13 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private toolCompleted = 0;
   private toolFailed = 0;
   private toolCancelled = 0;
+  private readonly sessionListeners = new Set<(session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void>();
+
+  /** Notifies a consumer each time a provider session opens, with the provider's capabilities. */
+  onSession(listener: (session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void): () => void {
+    this.sessionListeners.add(listener);
+    return () => this.sessionListeners.delete(listener);
+  }
 
   constructor(
     private readonly core: RealtimeCore,
@@ -119,6 +127,10 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     private readonly player?: PcmPlayerSpec,
     /** Removes the assistant's own voice from capture before the provider hears it. Omitted means no cancellation. */
     private readonly echo?: EchoGuard,
+    /** Receives the same echo-cleaned 20ms frames that are sent to the realtime provider. */
+    private readonly onInputFrame?: (frame: AudioFrame, sessionId: string) => void,
+    /** Signals consumers that the provider session no longer accepts capture. */
+    private readonly onInputSessionEnded?: (sessionId: string) => void,
   ) {}
 
   async health(): Promise<ComponentHealth> {
@@ -136,12 +148,14 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
 
   async stop(): Promise<void> {
     this.clearCaptureIdleFlush();
+    if (this.active) this.onInputSessionEnded?.(this.active.id);
     await this.echo?.close();
     await this.active?.close();
     this.active = undefined;
     this.opening = false;
     this.pendingFrames = [];
     this.frameizer.reset();
+    this.inputFrameTimestampMs = Date.now();
     this.onActivity = undefined;
   }
 
@@ -150,6 +164,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.opening = true;
     this.pendingFrames = [];
     this.frameizer.reset();
+    this.inputFrameTimestampMs = Date.now();
     this.resetMetrics();
     const message = (error: unknown) => this.redact(error instanceof Error ? error.message : String(error));
     let config: RealtimeSessionConfig;
@@ -185,6 +200,12 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.active = session;
     this.opening = false;
     this.trace({ type: "realtime.connect.succeeded", timestampMs: Date.now(), sessionId: session.id });
+    // Announced as a subscription rather than another constructor argument: a consumer
+    // that needs the live session (delegated result delivery) should not have to be
+    // threaded through every caller that only wants audio.
+    for (const listener of [...this.sessionListeners]) {
+      try { listener(session, await this.core.capabilities()); } catch (error) { this.trace({ type: "realtime.session.listener.failed", message: message(error) }); }
+    }
     await this.enqueueFrames(session, this.pendingFrames.splice(0));
 
     this.echo?.beginSession(session.id);
@@ -230,6 +251,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
         }
         if (event.type === "tool.requested") await this.handleToolRequest(session, event, input.signal);
         if (event.type === "session.closed" || event.type === "session.error") {
+          this.onInputSessionEnded?.(session.id);
           if (this.active === session) this.active = undefined;
           this.clearCaptureIdleFlush();
           this.onActivity = undefined;
@@ -261,6 +283,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
         this.pendingFrames = [];
         this.frameizer.reset();
         this.onActivity = undefined;
+        this.onInputSessionEnded?.(session.id);
         await session.close();
       },
       done,
@@ -293,6 +316,10 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       return;
     }
 
+    for (const data of frames) {
+      this.onInputFrame?.({ streamId: REALTIME_MICROPHONE_STREAM_ID, timestampMs: this.inputFrameTimestampMs, format: { ...REALTIME_INPUT_FORMAT }, data }, session.id);
+      this.inputFrameTimestampMs += REALTIME_INPUT_FORMAT.frameDurationMs;
+    }
     await this.enqueueFrames(session, frames);
   }
 

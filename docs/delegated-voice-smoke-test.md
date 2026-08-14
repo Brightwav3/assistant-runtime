@@ -15,10 +15,20 @@ session, and not a speaker.
 | Normalized usage, retries, unknown-cost policy, forecasts | `intelligence-core` + `assistant-runtime` usage tests | VERIFIED offline |
 | Broker lifecycle, delivery scheduling, late results | `assistant-runtime` — `tests/delegation-*.test.ts` | VERIFIED offline |
 | MIT / Mars / submarine disambiguation end to end | `assistant-runtime` — `tests/robot-memory-delegation.test.ts` | VERIFIED offline, fake providers |
-| Gemini `sendClientContent` accepts turns on an open session | `@google/genai` 1.52.0 type contract + `tests/gemini.test.ts` | VERIFIED against the SDK, **not** against a live session |
+| Gemini `sendClientContent` injects a delegated result into a live session | Hardware run 2026-08-14; `delegation.delivery.sent` with no degraded diagnostic | **VERIFIED live** |
+| The user keeps talking while delegation runs; the result lands afterwards | Hardware run 2026-08-14; `when_idle` queued behind the acknowledgement, then delivered | **VERIFIED live** |
+| Czech recognition of the submarine prompt, native Gemini STT | Hardware run 2026-08-14; self-corrected "motorkách… ponorkách" transcribed and handled | **VERIFIED live** |
+| Delegated recall answers from memory, not invention | Hardware run 2026-08-14; returned seals and cold-water battery life, matching the stored record | **VERIFIED live** |
 | Gemini live tool calling is non-blocking | — | UNVERIFIED — claimed as `blocking` on purpose |
 | Gemini native result scheduling | — | UNVERIFIED — claimed as `false` on purpose |
-| Czech recognition of the robot prompt | — | UNVERIFIED — needs this procedure |
+
+### Observed defect, not yet fixed
+
+In the same run, an unintelligible utterance transcribed as `あの` was accepted as
+confirmation for `end_conversation`, and the assistant shut down. The persona
+requires an explicit confirmation and this was not one. The host-side guarantee held
+— the model only ever *asked*, and the host honoured it — but the model's reading of
+consent is too loose. A garbled sound should not end the session.
 
 Capabilities are deliberately under-claimed where unverified. Over-claiming
 `toolCalling: "async"` would make the runtime skip its degraded path and drop a

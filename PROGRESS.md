@@ -165,8 +165,26 @@ What is verified, and by what:
   policy, reconnect drain, bounded queue, and clean shutdown. VERIFIED.
 - The MIT / Mars / submarine disambiguation end to end, with no API key, microphone,
   network, or generated audio. VERIFIED offline.
-- Gemini active-session context injection via `sendClientContent` — VERIFIED against
-  the `@google/genai` 1.52.0 contract, **not** against a live session.
+- Gemini active-session context injection via `sendClientContent` — **VERIFIED against a
+  live session** on 2026-08-14, not only against the SDK contract: the delegated result
+  was delivered with no degraded diagnostic.
+
+Hardware run, 2026-08-14, Gemini Live voice with `gemini-3.5-flash-lite` delegation:
+
+- the user asked in Czech, self-correcting mid-sentence, and was understood by Gemini's
+  own input transcription;
+- delegation was acknowledged immediately, ran `memory_search` then `memory_view`, and
+  the result was queued behind the acknowledgement and delivered once the assistant
+  stopped speaking — `when_idle` behaving as specified;
+- the spoken answer contained the stored details (seals, cold-water battery life) and
+  nothing invented;
+- a follow-up question delegated again and answered from the same record;
+- end-to-end delegation latency was roughly two seconds.
+
+Observed defect from that run, not yet fixed: an unintelligible utterance transcribed
+as `あの` was treated as confirmation for `end_conversation`. The host-side guarantee
+held — the model may only ask, and the host decides — but the model's reading of
+consent is too loose, and a garbled sound should not end a session.
 
 What is deliberately still unverified:
 

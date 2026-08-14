@@ -13,48 +13,48 @@ jobs:
   verify:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: assistant-runtime
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/Jarvis-brain-core
           path: core-runtime
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/activation-core
           path: activation-core
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/Jarvis-speech-system
           path: speech-system
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/intelligence-core
           path: intelligence-core
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/memory-core
           path: memory-core
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/aec-system
           path: aec-system
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/state-core
           path: state-core
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/tool-system
           ref: main
           path: tool-system
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: Brightwav3/host-tools
           ref: main
           path: host-tools
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install ffmpeg

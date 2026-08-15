@@ -148,6 +148,15 @@ export class RuntimeDelegationBroker implements DelegationBroker {
     return {
       request_id: request.requestId,
       input: { type: "text", text: context ? `${request.goal}\n\nSelected context:\n${context}` : request.goal },
+      // The selection travels with the execution rather than being read off the action
+      // runtime's constructor. Without this the configured fallback models were carried
+      // the whole way here and then silently dropped: a primary-model outage looked like
+      // a delegation that simply failed, with the fallbacks never tried.
+      model: {
+        provider_id: request.model.provider,
+        model: request.model.model,
+        ...(request.model.fallbackModels.length ? { fallback_models: [...request.model.fallbackModels] } : {}),
+      },
       ...(request.sessionId ? { session_id: request.sessionId } : {}),
       ...(request.interactionId ? { interaction_id: request.interactionId } : {}),
       execution: {

@@ -250,3 +250,40 @@ test("result parsing accepts only a well-formed delegation result", () => {
   assert.equal(parseDelegationResult({ schema: "delegation.result.v1", data: {}, references: [{ provenance: {} }] }), undefined);
   assert.ok(parseDelegationResult({ schema: "delegation.result.v1", data: {}, references: [] }));
 });
+
+/**
+ * The selection used to be copied carefully into the DelegationRequest and then never
+ * read again: the model came from the action runtime's constructor and the configured
+ * fallbacks were silently dropped. Nothing failed, which is what made it survive.
+ */
+test("the configured model selection reaches the execution", async () => {
+  const intelligence = new ScriptedIntelligence("manual");
+  const { broker } = brokerWith(intelligence);
+  await broker.accept(input({ model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels: ["gemini-2.5-pro", "gemini-2.0-flash"] } }));
+
+  assert.deepEqual(intelligence.lastRequest?.model, {
+    provider_id: "gemini",
+    model: "gemini-2.5-flash",
+    fallback_models: ["gemini-2.5-pro", "gemini-2.0-flash"],
+  });
+});
+
+test("an empty fallback list is omitted rather than sent as an empty instruction", async () => {
+  const intelligence = new ScriptedIntelligence("manual");
+  const { broker } = brokerWith(intelligence);
+  await broker.accept(input());
+
+  assert.equal(intelligence.lastRequest?.model?.model, "gemini-2.5-flash");
+  assert.equal("fallback_models" in (intelligence.lastRequest?.model ?? {}), false);
+});
+
+test("the fallback list is copied, so a later edit by the caller cannot change it mid-flight", async () => {
+  const intelligence = new ScriptedIntelligence("manual");
+  const { broker } = brokerWith(intelligence);
+  const fallbackModels = ["gemini-2.5-pro"];
+  await broker.accept(input({ model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels } }));
+
+  fallbackModels.push("something-else");
+
+  assert.deepEqual(intelligence.lastRequest?.model?.fallback_models, ["gemini-2.5-pro"]);
+});

@@ -1,4 +1,4 @@
-import { EpisodeRuntime } from "memory-core";
+import { EpisodeRuntime, type EpisodeUncertainPart } from "memory-core";
 import type { RealtimeSpeechEvent } from "realtime-core";
 import type { MemoryExtractionInput, MemoryExtractionTurn } from "intelligence-core";
 import type { MemoryExtractionOrchestrator } from "./memory-extraction.js";
@@ -25,7 +25,7 @@ export interface HeardInput {
   verbatim: string;
   meaning: string;
   language: string;
-  uncertainParts: string[];
+  uncertainParts: EpisodeUncertainPart[];
 }
 
 /**
@@ -177,7 +177,9 @@ export class EpisodeMemoryWriter {
   }
 
   private async processHeard(input: HeardInput): Promise<void> {
-    const text = input.meaning.trim() || input.verbatim.trim();
+    const verbatim = input.verbatim.trim();
+    const meaning = input.meaning.trim();
+    const text = verbatim || meaning;
     // The heard record carries the provider session it was captured in; the episode it
     // belongs to is the conversation, which outlives that session across a handoff.
     const sessionId = this.resolveConversationId(input.sessionId);
@@ -190,6 +192,9 @@ export class EpisodeMemoryWriter {
       status: "complete",
       sourceEventId: input.heardId,
       transcriptConfidence,
+      ...(verbatim ? { verbatim } : {}),
+      ...(meaning ? { meaning } : {}),
+      ...(input.uncertainParts.length ? { uncertainParts: input.uncertainParts } : {}),
     });
     if (!turn) return;
     this.sessionsWithUserTurn.add(sessionId);

@@ -107,15 +107,20 @@ export class DelegationDeliveryScheduler {
    * explicitly dropped — never leaving it in an unobservable state.
    */
   public async deliver(event: Extract<DelegationEvent, { type: "delegation.completed" }>, delivery: DelegationDeliveryPolicy): Promise<void> {
-    const sessionId = event.sessionId;
-    if (!sessionId) {
-      this.report({ ...event, type: "delegation.delivery.dropped", delivery, reason: "NO_SESSION", occurredAt: this.clock() } as DelegationEvent);
-      return;
-    }
+    // Silent is decided before the session is looked at, because a silent result was never
+    // going to a session. Compaction is the case that matters: it deliberately carries no
+    // session id so it can outlive the session it is replacing, and reporting that as
+    // NO_SESSION described a working handoff as a lost answer — in the operator console it
+    // read as "výsledek zahozen" at the exact moment the user was waiting for one.
     if (delivery.mode === "silent") {
       // Silent is a real outcome, not a no-op: it is recorded so the result is auditable
       // even though nothing is spoken.
       this.report({ ...event, type: "delegation.delivery.sent", delivery, source: "delegation", occurredAt: this.clock() } as DelegationEvent);
+      return;
+    }
+    const sessionId = event.sessionId;
+    if (!sessionId) {
+      this.report({ ...event, type: "delegation.delivery.dropped", delivery, reason: "NO_SESSION", occurredAt: this.clock() } as DelegationEvent);
       return;
     }
     const binding = this.sessions.get(sessionId);

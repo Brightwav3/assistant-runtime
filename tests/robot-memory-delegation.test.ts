@@ -148,7 +148,7 @@ test("the robot-memory conversation completes end to end without inventing a res
   // 1. The voice model asks for delegation and is answered immediately.
   const report = await voiceTools.execute({
     tool: INTELLIGENCE_DELEGATE_TOOL,
-    args: { goal: "Najdi relevantní vzpomínky o novém robotovi", delivery: "when_idle" },
+    args: { goal: "Najdi relevantní vzpomínky o novém robotovi", delivery: "when_idle", current_verbatim: "Co víte o novém robotovi?", current_meaning: "Uživatel se ptá na nového robota.", current_language: "cs", current_uncertain_parts: "[]" },
     requestId: "voice-call-1",
   });
   assert.equal(report.outcome.kind, "continuation");

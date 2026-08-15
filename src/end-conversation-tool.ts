@@ -1,4 +1,5 @@
 import type { ExecutionOutcome, ToolDeclaration, ToolHandler } from "tool-system";
+import type { EpisodeRuntime } from "memory-core";
 
 export const END_CONVERSATION_TOOL = "end_conversation";
 
@@ -30,10 +31,28 @@ export function endConversationDeclaration(): ToolDeclaration {
   };
 }
 
-export function endConversationHandler(): ToolHandler {
-  return async (args): Promise<ExecutionOutcome> => ({
+export interface EndConversationOptions { episodes: Pick<EpisodeRuntime, "listTurns">; session: () => string | undefined; }
+
+const endRequest = /\b(to je vše|končíme|ukonč|vypni|už nic nepotřebuji)\b/iu;
+const confirmation = /\b(ano|jo|potvrzuji|ukončete se|vypněte se)\b/iu;
+
+export function endConversationHandler(options?: EndConversationOptions): ToolHandler {
+  return async (args): Promise<ExecutionOutcome> => {
+    if (options) {
+      const sessionId = options.session();
+      const turns = sessionId ? await options.episodes.listTurns(sessionId) : [];
+      const recent = turns.slice(-6);
+      const lastUser = [...recent].reverse().find((turn) => turn.speaker === "user");
+      const priorUser = [...recent].reverse().find((turn) => turn.speaker === "user" && turn.turnId !== lastUser?.turnId);
+      const askedConfirmation = recent.some((turn) => turn.speaker === "assistant" && /\b(ukončit|vypnout|skončit)\b/iu.test(turn.text));
+      if (!lastUser || !priorUser || !endRequest.test([priorUser.verbatim, priorUser.meaning, priorUser.text].filter(Boolean).join(" ")) || !askedConfirmation || !confirmation.test([lastUser.verbatim, lastUser.meaning, lastUser.text].filter(Boolean).join(" "))) {
+        return { kind: "error", error: { code: "confirmation_required", message: "A prior end request and a later explicit confirmation are required.", retryable: false } };
+      }
+    }
+    return {
     kind: "lifecycle",
     action: "shutdown",
     reason: typeof args.reason === "string" && args.reason.trim() ? args.reason.trim() : "The user asked to end the conversation.",
-  });
+    };
+  };
 }

@@ -3,6 +3,10 @@ import test from "node:test";
 import { AllowlistPolicy, ToolRegistry, ToolRuntime } from "tool-system";
 import { END_CONVERSATION_TOOL, endConversationDeclaration, endConversationHandler } from "../src/end-conversation-tool.js";
 import { ToolSystemRealtimeToolExecutor, type LifecycleRequest } from "../src/tool-bridge.js";
+import { EpisodeRuntime, SqliteEpisodeStore } from "memory-core";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function executorWithEndConversation(onLifecycle?: (request: LifecycleRequest) => void) {
   const registry = new ToolRegistry();
@@ -55,4 +59,17 @@ test("an immediate repeat of the same request does not shut down twice", async (
     await executor.execute({ callId: "call-2", tool: END_CONVERSATION_TOOL, arguments: { reason: "to je vše" } });
     assert.equal(seen.length, 1, "the cooldown must absorb an echoed or retried call");
   } finally { await runtime.stop(); }
+});
+
+test("delegated shutdown requires a prior request followed by explicit confirmation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "end-conversation-"));
+  const episodes = new EpisodeRuntime({ store: new SqliteEpisodeStore({ path: join(directory, "memory.sqlite") }), idFactory: (() => { let id = 0; return () => `turn-${++id}`; })() });
+  await episodes.start();
+  await episodes.startSession({ sessionId: "session-1", subjectId: "user-1", startedAt: "2026-08-15T00:00:00Z" });
+  await episodes.appendTurn("session-1", { speaker: "user", text: "To je vše, děkuji.", status: "complete", startedAt: "2026-08-15T00:00:01Z" });
+  const handler = endConversationHandler({ episodes, session: () => "session-1" });
+  assert.equal((await handler({ reason: "ukončit" }, {} as never)).kind, "error");
+  await episodes.appendTurn("session-1", { speaker: "assistant", text: "Mám se ukončit?", status: "complete", startedAt: "2026-08-15T00:00:02Z" });
+  await episodes.appendTurn("session-1", { speaker: "user", text: "Ano, ukončete se.", status: "complete", startedAt: "2026-08-15T00:00:03Z" });
+  assert.equal((await handler({ reason: "Ano, ukončete se." }, {} as never)).kind, "lifecycle");
 });

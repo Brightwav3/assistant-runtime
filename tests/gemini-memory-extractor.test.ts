@@ -60,6 +60,46 @@ test("one invalid candidate is skipped without discarding its valid neighbours",
   assert.ok(diagnostics.some((event) => event.type === "memory.extraction.partial" && event.accepted === 2 && event.rejected === 1));
 });
 
+test("provider shorthand is normalized into five runtime-bound memory candidates", async () => {
+  const episode = {
+    subjectId: "user-1",
+    sessionId: "session-1",
+    turns: [
+      { turnId: "turn-profile", speaker: "user" as const, text: "Mám rád malé motorky, jmenuji se Šimon a bydlím v Brně." },
+      { turnId: "turn-health", speaker: "user" as const, text: "Piju kávu bez cukru a mám alergii na vlašské ořechy." },
+    ],
+  };
+  const extractor = new GeminiMemoryExtractor({ models: new FakeModel(response([
+    { candidateId: "cand_name", disposition: "store", kind: "person", content: "Uživatel se jmenuje Šimon.", confidence: 0.99, evidence: ["turn-profile"], reason: "Explicitly stated." },
+    { candidateId: "cand_location", disposition: "store", kind: "fact", content: { type: "text", text: "Uživatel bydlí v Brně." }, confidence: 0.98, evidence: [{ turnId: "turn-profile" }], reason: "Explicitly stated." },
+    { candidateId: "cand_interest_motorcycles", disposition: "store", kind: "preference", content: "Uživatel má rád malé motorky.", confidence: 0.97, evidence: [{ sourceType: "conversation", sourceId: "turn-profile" }], reason: "Explicit preference." },
+    { candidateId: "cand_coffee_preference", disposition: "store", kind: "preference", subjectId: "user-1", content: "Uživatel pije kávu bez cukru.", confidence: 0.97, evidence: ["turn-health"], reason: "Explicit preference." },
+    { candidateId: "cand_allergy", disposition: "store", kind: "instructional", content: "Uživatel má alergii na vlašské ořechy.", confidence: 0.99, evidence: [{ sourceType: "turn", sourceId: "turn-health" }], reason: "Safety-critical explicit statement." },
+  ])), providerId: "gemini", model: "gemini-test" });
+
+  const candidates = await extractor.extract(episode);
+
+  assert.equal(candidates.length, 5);
+  assert.ok(candidates.every(({ subjectId }) => subjectId === "user-1"));
+  assert.deepEqual(candidates.map(({ evidence }) => evidence[0]), [
+    { sourceType: "turn", sourceId: "turn-profile" },
+    { sourceType: "turn", sourceId: "turn-profile" },
+    { sourceType: "turn", sourceId: "turn-profile" },
+    { sourceType: "turn", sourceId: "turn-health" },
+    { sourceType: "turn", sourceId: "turn-health" },
+  ]);
+  assert.deepEqual(candidates[0]?.content, { type: "text", text: "Uživatel se jmenuje Šimon." });
+});
+
+test("normalization never accepts a foreign subject or an evidence id outside the episode", async () => {
+  const extractor = new GeminiMemoryExtractor({ models: new FakeModel(response([
+    { candidateId: "foreign-subject", disposition: "store", kind: "fact", subjectId: "user-2", content: "bad", confidence: 1, evidence: ["turn-1"], reason: "bad" },
+    { candidateId: "foreign-turn", disposition: "store", kind: "fact", content: "bad", confidence: 1, evidence: ["turn-other"], reason: "bad" },
+  ])), providerId: "gemini", model: "gemini-test" });
+
+  assert.deepEqual(await extractor.extract(input), []);
+});
+
 test("only high-confidence preference and instructional candidates remain auto-storable", async () => {
   const extractor = new GeminiMemoryExtractor({ models: new FakeModel(response([
     { candidateId: "transient", disposition: "episode_only", kind: "event", subjectId: "user-1", content: { type: "text", text: "Today is sunny" }, confidence: 0.99, evidence: [{ sourceType: "turn", sourceId: "turn-1" }], reason: "Transient event." },

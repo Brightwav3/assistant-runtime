@@ -74,10 +74,10 @@ const SYSTEM_PERSONA = [
 ].join(" ");
 
 const HEARD_DEBUG_INSTRUCTION = [
-  "DIAGNOSTICKÝ REŽIM: po každé uživatelské promluvě jednou zavolej nástroj record_heard.",
+  "DIAGNOSTICKÝ REŽIM: pokud pro promluvu voláš intelligence_delegate, nevolej navíc record_heard, protože composite delegate ji zapíše sám. Jen u nedelagované promluvy zavolej record_heard.",
   "Do verbatim napiš nejlepší doslovnou rekonstrukci slov, která jsi slyšel, bez parafráze.",
   "Do meaning napiš česky, co si myslíš, že uživatel významově řekl.",
-  "Do language napiš zjištěný jazyk a do uncertain_parts uveď nejistá slova oddělená čárkou.",
+  "Do language napiš zjištěný jazyk. Do uncertain_parts napiš JSON pole objektů s text, uncertainty low|medium|high a případnými alternatives; při úplné jistotě napiš [].",
   "Tento nástroj je pouze diagnostický, nikdy ho nezmiňuj nahlas a jeho výsledek nesmí změnit odpověď.",
 ].join(" ");
 
@@ -96,7 +96,7 @@ async function createDefaultToolRuntime(trace: (event: Record<string, unknown>) 
   const failed = registerDelegation
     ? []
     : installCatalogue(registry, { uptime: nodeUptimeSource(), system: nodeSystemProbe() }).failed;
-  const endConversation = registry.register(endConversationDeclaration(), endConversationHandler());
+  const endConversation = registerDelegation ? null : registry.register(endConversationDeclaration(), endConversationHandler());
   const heardPath = debug?.heard ? await createRunHeardPath(debug.path) : undefined;
   const heard = heardPath ? registry.register(recordHeardDeclaration(), recordHeardHandler({
     path: heardPath,
@@ -118,7 +118,7 @@ async function createDefaultToolRuntime(trace: (event: Record<string, unknown>) 
   const problems = [...failed, ...(endConversation ? [endConversation] : []), ...(heard ? [heard] : [])];
   if (problems.length > 0) trace({ type: "tools.install.failed", tools: problems.map((failure) => failure.message) });
   const delegateTool = registerDelegation?.(registry);
-  const allow = delegateTool ? [delegateTool, END_CONVERSATION_TOOL] : [...DEFAULT_REALTIME_TOOLS];
+  const allow = delegateTool ? [delegateTool] : [...DEFAULT_REALTIME_TOOLS];
   if (debug?.heard && !heard) allow.push(RECORD_HEARD_TOOL);
   trace({ type: "tools.voice.catalogue", tools: allow });
   return new ToolRuntime({ registry, policy: new AllowlistPolicy({ allow }) });
@@ -166,6 +166,7 @@ const DELEGATION_INSTRUCTION = [
   "Nemáš přímý přístup k paměti uživatele a NEMÁŠ žádné vzpomínky ve svém kontextu.",
   "Kdykoli se uživatel ptá na něco, co jste probírali dřív, na uloženou vzpomínku, projekt, osobu nebo dřívější rozhodnutí,",
   "zavolej nástroj intelligence_delegate a do parametru goal napiš česky, co je potřeba zjistit.",
+  "Do každého intelligence_delegate vždy přidej current_verbatim, current_meaning, current_language a current_uncertain_parts pro právě slyšenou uživatelskou větu; tím se věta atomicky zapíše před delegací.",
   "Nástroj se vrátí okamžitě a NEOBSAHUJE odpověď.",
   "Poté řekni JEDNU krátkou větu, že se na to díváš, například „Moment, podívám se.“ — a pak už na to téma mlč.",
   "ABSOLUTNÍ PRAVIDLO: dokud nedorazí zpráva označená DELEGATION RESULT, neuveď žádný konkrétní údaj o minulé konverzaci.",
@@ -226,8 +227,16 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
         // The turns of the conversation in progress. Extraction has not run over them yet,
         // so this is the only place "what did I just say" can be answered from.
         ...(episodes ? { episodes } : {}),
+        // The host catalogue goes to the delegated model and nowhere else. The voice
+        // catalogue stays exactly one tool wide.
+        hostTools: { uptime: nodeUptimeSource(), system: nodeSystemProbe() },
         subjectId: settings.memory.scopeSubjectId,
         correlation: () => (activeSessionId ? { sessionId: activeSessionId } : {}),
+        onLifecycle: (request) => {
+          if (request.action !== "shutdown") return;
+          trace({ type: "runtime.shutdown.requested", tool: request.tool, reason: request.reason });
+          announceShutdown({ reason: request.reason });
+        },
         ...(usageSettings.priceCatalog ? { priceCatalog: usageSettings.priceCatalog } : {}),
         trace,
       })
@@ -252,8 +261,10 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
         delegation: delegationSettings,
         usage: usageSettings,
         memory: memory!,
+        ...(episodes ? { episodes } : {}),
         subjectId: settings.memory.scopeSubjectId,
         correlation: () => (activeSessionId ? { sessionId: activeSessionId } : {}),
+        captureCurrentTurn: async (input) => { await episodeMemory?.handleHeard(input); },
       }) : undefined, settings.debug, async (input) => { await episodeMemory?.handleHeard(input); });
   const realtimeToolExecutor = options.realtimeToolExecutor ?? (tools
     ? new ToolSystemRealtimeToolExecutor(tools, (request) => {

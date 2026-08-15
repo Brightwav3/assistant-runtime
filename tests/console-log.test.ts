@@ -34,3 +34,30 @@ test("human trace keeps lifecycle, input, and tool messages readable", () => {
     "Nástroj dokončen.",
   ]);
 });
+
+test("human trace summarizes handoff, compaction, memory closure, and the raw trace path", () => {
+  const lines: string[] = [];
+  const trace = createHumanTrace((line) => lines.push(line));
+
+  trace({ type: "debug.trace.started", path: "C:\\runtime\\traces\\trace-1.jsonl" });
+  trace({ type: "handoff.prepared" });
+  trace({ type: "compaction.started" });
+  trace({ type: "compaction.completed" });
+  trace({ type: "handoff.ready" });
+  trace({ type: "handoff.committed" });
+  trace({ type: "memory.episode.closed" });
+  trace({ type: "delegation.failed", failure: { code: "DELEGATION_RESULT_INVALID" } });
+  trace({ type: "debug.trace.closed", path: "C:\\runtime\\traces\\trace-1.jsonl" });
+
+  assert.deepEqual(lines, [
+    "Raw trace: C:\\runtime\\traces\\trace-1.jsonl",
+    "Handoff: příprava…",
+    "Compaction: probíhá…",
+    "Compaction: dokončena.",
+    "Handoff: připraven.",
+    "Handoff: přepnuto.",
+    "Paměť: epizoda uzavřena.",
+    "Delegace selhala: DELEGATION_RESULT_INVALID.",
+    "Raw trace uložen: C:\\runtime\\traces\\trace-1.jsonl",
+  ]);
+});

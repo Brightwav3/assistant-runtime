@@ -61,7 +61,7 @@ test("flush closes separate active sessions without merging their turns", async 
   } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });
 
-test("heard meaning replaces the provider transcript in the episode", async () => {
+test("heard keeps verbatim and meaning separately in the episode", async () => {
   const directory = await mkdtemp(join(tmpdir(), "assistant-episode-heard-"));
   const episodes = new EpisodeRuntime({
     store: new SqliteEpisodeStore({ path: join(directory, "memory.sqlite") }),
@@ -80,8 +80,14 @@ test("heard meaning replaces the provider transcript in the episode", async () =
     });
 
     const turns = await episodes.listTurns("session-1");
-    assert.deepEqual(turns.map(({ speaker, text, sourceEventId }) => ({ speaker, text, sourceEventId })), [
-      { speaker: "user", text: "User remembers that they discussed robots.", sourceEventId: "heard-1" },
+    assert.deepEqual(turns.map(({ speaker, text, sourceEventId, verbatim, meaning }) => ({ speaker, text, sourceEventId, verbatim, meaning })), [
+      {
+        speaker: "user",
+        text: "Pamatuju si, že jsme se bavili o robotech.",
+        sourceEventId: "heard-1",
+        verbatim: "Pamatuju si, že jsme se bavili o robotech.",
+        meaning: "User remembers that they discussed robots.",
+      },
     ]);
   } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

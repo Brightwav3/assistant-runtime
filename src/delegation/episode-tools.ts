@@ -58,18 +58,21 @@ function fold(value: string): string {
 
 function matches(turn: EpisodeTurn, tokens: string[]): boolean {
   if (!tokens.length) return true;
-  const text = fold(turn.text);
+  const text = fold([turn.text, turn.verbatim, turn.meaning].filter(Boolean).join("\n"));
   return tokens.some((token) => text.includes(token));
 }
 
 function render(turn: EpisodeTurn): string {
-  const text = turn.text.length > CONVERSATION_RECALL_LIMITS.maxTurnCharacters
-    ? `${turn.text.slice(0, CONVERSATION_RECALL_LIMITS.maxTurnCharacters)}…`
-    : turn.text;
+  const evidence = turn.verbatim && turn.meaning && turn.verbatim !== turn.meaning
+    ? `verbatim: ${turn.verbatim}\nmeaning: ${turn.meaning}`
+    : turn.verbatim ?? turn.meaning ?? turn.text;
+  const text = evidence.length > CONVERSATION_RECALL_LIMITS.maxTurnCharacters
+    ? `${evidence.slice(0, CONVERSATION_RECALL_LIMITS.maxTurnCharacters)}…`
+    : evidence;
   // The confidence marker is carried through rather than dropped: a turn the transcriber
   // was unsure of must not be quoted back to the user as though it were verbatim.
   const flag = turn.transcriptConfidence === "unreliable" ? " (uncertain transcript)" : "";
-  return `[${turn.sequence}] ${turn.speaker}${flag}: ${text}`;
+  return `[turnId=${turn.turnId} sequence=${turn.sequence}] ${turn.speaker}${flag}: ${text}`;
 }
 
 export function conversationRecallHandler(options: ConversationRecallOptions): ToolHandler {

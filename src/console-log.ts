@@ -28,6 +28,17 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
   return (event) => {
     const type = asText(event.type);
 
+    if (type === "debug.trace.started") { print(`Raw trace: ${asText(event.path)}`); return; }
+    if (type === "debug.trace.closed") { print(`Raw trace uložen: ${asText(event.path)}`); return; }
+    if (type === "handoff.prepared") { print("Handoff: příprava…"); return; }
+    if (type === "handoff.ready") { print("Handoff: připraven."); return; }
+    if (type === "handoff.committed") { print("Handoff: přepnuto."); return; }
+    if (type === "handoff.aborted") { print(`Handoff selhal: ${asText(event.failure) || "neznámá chyba"}.`); return; }
+    if (type === "compaction.started") { print("Compaction: probíhá…"); return; }
+    if (type === "compaction.completed") { print("Compaction: dokončena."); return; }
+    if (type === "compaction.failed") { print(`Compaction selhala: ${asText(event.failure) || "neznámá chyba"}.`); return; }
+    if (type === "memory.episode.closed") { print("Paměť: epizoda uzavřena."); return; }
+
     if (type === "realtime.input.metrics" || type === "realtime.playback.chunk" || type === "realtime.playback.metrics" || type === "playback.spawned" || type === "playback.stderr" || type === "playback.closed" || type === "realtime.stream.ended") return;
 
     if (type === "playback.preflight") {

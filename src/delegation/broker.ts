@@ -79,7 +79,14 @@ export function parseDelegationResult(value: unknown): DelegationStructuredResul
   if (!Array.isArray(candidate.references)) return undefined;
   const references = candidate.references.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
   if (references.length !== candidate.references.length) return undefined;
-  if (!references.every((entry) => typeof entry.memoryId === "string" && typeof entry.provenance === "object" && entry.provenance !== null)) return undefined;
+  if (!references.every((entry) => {
+    if (typeof entry.provenance !== "object" || entry.provenance === null) return false;
+    const provenance = entry.provenance as Record<string, unknown>;
+    if (typeof entry.memoryId === "string" && entry.memoryId.trim()) return true;
+    return typeof entry.turnId === "string" && entry.turnId.trim().length > 0
+      && provenance.sourceType === "conversation"
+      && provenance.sourceId === entry.turnId;
+  })) return undefined;
   return {
     schema: "delegation.result.v1",
     ...(typeof candidate.summary === "string" ? { summary: candidate.summary } : {}),

@@ -21,6 +21,7 @@ import { ToolSystemRealtimeToolExecutor, ToolSystemToolClient } from "../src/too
 import type { DelegationAccepted, DelegationBroker, DelegationRequest } from "../src/contracts.js";
 
 const SUBJECT = "user-1";
+const CURRENT_TURN = { current_verbatim: "Aktuální věta.", current_meaning: "Aktuální věta.", current_language: "cs", current_uncertain_parts: "[]" } as const;
 
 const fact = (text: string, subjectId = SUBJECT, extra: Partial<CreateMemoryInput> = {}): CreateMemoryInput => ({
   kind: "fact",
@@ -67,12 +68,14 @@ async function delegatedToolSystem(memory: MemoryRuntime, allow: string[] = [MEM
   return runtime;
 }
 
-async function voiceToolSystem(broker: DelegationBroker) {
+async function voiceToolSystem(broker: DelegationBroker, capture?: (input: { verbatim: string; meaning: string; language: string; uncertainParts: unknown[]; heardId: string }) => Promise<void>) {
   const registry = new ToolRegistry();
   registry.register(intelligenceDelegateDeclaration(), intelligenceDelegateHandler({
     broker,
     model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels: [] },
     correlation: () => ({ sessionId: "session-1", interactionId: "interaction-1" }),
+    captureCurrentTurn: capture,
+    selectedContext: async () => [{ sourceId: "turn-7", text: "user: Mám rád malé motorky", kind: "episode" }],
     deadlineMs: 30_000,
     maximumModelCalls: 4,
     maximumToolCalls: 8,
@@ -169,7 +172,7 @@ test("cancellation reaches Memory Core through the tool context signal", async (
 test("intelligence_delegate returns a continuation immediately and does not await a result", async () => {
   const broker = new RecordingBroker();
   const runtime = await voiceToolSystem(broker);
-  const report = await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "Najdi relevantni vzpominky o novem robotovi", delivery: "when_idle" }, requestId: "call-1" });
+  const report = await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "Najdi relevantni vzpominky o novem robotovi", delivery: "when_idle", ...CURRENT_TURN }, requestId: "call-1" });
 
   assert.equal(report.outcome.kind, "continuation");
   if (report.outcome.kind !== "continuation") throw new Error("expected a continuation");
@@ -184,16 +187,45 @@ test("intelligence_delegate returns a continuation immediately and does not awai
 test("the delegation request is correlated to the live session, not to anything the model named", async () => {
   const broker = new RecordingBroker();
   const runtime = await voiceToolSystem(broker);
-  await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "najdi robota", delivery: "interrupt", memory_ids: "robot-mit, robot-mars" }, requestId: "call-1" });
+  await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "najdi robota", delivery: "interrupt", memory_ids: "robot-mit, robot-mars", ...CURRENT_TURN }, requestId: "call-1" });
 
   const accepted = broker.accepted[0]!;
   assert.equal(accepted.sessionId, "session-1");
   assert.equal(accepted.interactionId, "interaction-1");
   assert.deepEqual(accepted.selectedMemoryIds, ["robot-mit", "robot-mars"]);
+  assert.deepEqual(accepted.selectedContext, [{ sourceId: "turn-7", text: "user: Mám rád malé motorky", kind: "episode" }]);
   assert.equal(accepted.delivery.mode, "interrupt");
   assert.equal(accepted.model.model, "gemini-2.5-flash");
   assert.equal(accepted.maximumModelCalls, 4);
   assert.equal(accepted.cancelOnSessionClose, true);
+});
+
+test("intelligence_delegate captures the current turn before recall context and broker acceptance", async () => {
+  const order: string[] = [];
+  const broker = new RecordingBroker();
+  const registry = new ToolRegistry();
+  registry.register(intelligenceDelegateDeclaration(), intelligenceDelegateHandler({
+    broker: { ...broker, accept: async (input) => { order.push("accept"); return broker.accept(input); } } as DelegationBroker,
+    model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels: [] },
+    correlation: () => ({ sessionId: "session-1" }),
+    captureCurrentTurn: async (input) => { order.push(`capture:${input.verbatim}`); },
+    selectedContext: async () => { order.push("recall"); return []; },
+    maximumModelCalls: 2,
+    maximumToolCalls: 2,
+    cancelOnSessionClose: true,
+    defaultDelivery: { mode: "when_idle", lateResult: "queue" },
+  }));
+  const runtime = new ToolRuntime({ registry, policy: new AllowlistPolicy({ allow: [INTELLIGENCE_DELEGATE_TOOL] }) });
+  await runtime.start();
+  const report = await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, requestId: "call-current", args: {
+    goal: "Ulož explicitní vzpomínku.",
+    current_verbatim: "Zapamatuj si, že mám rád červené motorky.",
+    current_meaning: "Uživatel chce uložit, že má rád červené motorky.",
+    current_language: "cs",
+    current_uncertain_parts: "[]",
+  } });
+  assert.equal(report.outcome.kind, "continuation");
+  assert.deepEqual(order, ["capture:Zapamatuj si, že mám rád červené motorky.", "recall", "accept"]);
 });
 
 test("an invalid delivery mode falls back to the configured default rather than failing the turn", async () => {
@@ -210,7 +242,7 @@ test("an invalid delivery mode falls back to the configured default rather than 
   }));
   const runtime = new ToolRuntime({ registry, policy: new AllowlistPolicy({ allow: [INTELLIGENCE_DELEGATE_TOOL] }), trace: new InMemoryTraceSink() });
   await runtime.start();
-  const report = await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "najdi robota" }, requestId: "call-1" });
+  const report = await runtime.execute({ tool: INTELLIGENCE_DELEGATE_TOOL, args: { goal: "najdi robota", ...CURRENT_TURN }, requestId: "call-1" });
   assert.equal(report.outcome.kind, "continuation");
   assert.equal(broker.accepted[0]?.delivery.mode, "silent");
 });

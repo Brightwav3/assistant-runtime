@@ -102,7 +102,30 @@ test("the delegated model can read what was said before the swap", async () => {
 
     assert.equal(outcome.kind, "result");
     assert.match(outcome.kind === "result" ? outcome.content : "", /malé motorky/, "the exact words survive the handoff, not just the summary");
+    assert.match(outcome.kind === "result" ? outcome.content : "", /turnId=/, "the model receives a stable conversation evidence id");
     assert.equal(outcome.kind === "result" ? outcome.taint : undefined, "external", "what somebody said is data, never instruction");
+  } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("conversation recall searches both literal words and semantic meaning", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "episode-recall-meaning-"));
+  const { episodes, writer } = await writerOn(directory, () => CONVERSATION);
+  try {
+    await writer.handleHeard({
+      heardId: "heard-bilingual",
+      sessionId: OLD_SESSION,
+      verbatim: "Mám rád malé motorky.",
+      meaning: "User likes small motorbikes.",
+      language: "cs",
+      uncertainParts: [],
+    });
+
+    const recall = conversationRecallHandler({ episodes, session: () => CONVERSATION });
+    const outcome = await recall({ query: "motorbikes" }, { requestId: "r-meaning", signal: undefined } as never);
+    const content = outcome.kind === "result" ? outcome.content : "";
+
+    assert.match(content, /verbatim: Mám rád malé motorky\./);
+    assert.match(content, /meaning: User likes small motorbikes\./);
   } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true }); }
 });
 

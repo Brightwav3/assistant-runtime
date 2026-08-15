@@ -73,7 +73,7 @@ async function fixture() {
     controller: harness.controller,
     context: compaction,
     emit: (event) => events.push(event),
-    readyTimeoutMs: 1_000,
+    readyTimeoutMs: 10_000,
   });
 
   return { intelligence, broker, delegationEvents, harness, events, handoff };

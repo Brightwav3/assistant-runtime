@@ -42,7 +42,7 @@ test("a delegation that outlives the session it was asked in is delivered to the
     activePhysicalSessionId: harness.initialSessionId,
     controller: harness.controller,
     context: harness.context,
-    readyTimeoutMs: 1_000,
+    readyTimeoutMs: 10_000,
   });
 
   await handoff.prepare("context_threshold");
@@ -72,7 +72,7 @@ test("the logical id is what downstream consumers see, before and after the swap
     activePhysicalSessionId: harness.initialSessionId,
     controller: harness.controller,
     context: harness.context,
-    readyTimeoutMs: 1_000,
+    readyTimeoutMs: 10_000,
     emit: (event) => seen.push(event.identity.logicalSessionId),
   });
 
@@ -98,7 +98,7 @@ test("delegations bound to the logical id are not cancelled by the physical swap
     activePhysicalSessionId: harness.initialSessionId,
     controller: harness.controller,
     context: harness.context,
-    readyTimeoutMs: 1_000,
+    readyTimeoutMs: 10_000,
   });
 
   await handoff.prepare("context_threshold");

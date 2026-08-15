@@ -14,7 +14,16 @@ import { HandoffCoordinator } from "../src/handoff/coordinator.js";
 import type { HandoffEvent } from "../src/handoff/contracts.js";
 import { assertSoleAudioOwner, createHarness } from "./handoff-harness.js";
 
-async function coordinator(options: Parameters<typeof createHarness>[0] = {}, readyTimeoutMs = 1_000) {
+/**
+ * The budgets below are generous on purpose. They are real wall-clock deadlines,
+ * and `node --test` runs test files in parallel, so a tight budget on a loaded CI
+ * runner expires from scheduling latency rather than from the behaviour under
+ * test — which surfaced as twenty-two tests cancelled, not failed.
+ *
+ * Tests that deliberately exercise a firing deadline set their own short value;
+ * see handoff-observability.test.ts.
+ */
+async function coordinator(options: Parameters<typeof createHarness>[0] = {}, readyTimeoutMs = 10_000) {
   const harness = await createHarness(options);
   const events: HandoffEvent[] = [];
   const handoff = new HandoffCoordinator({

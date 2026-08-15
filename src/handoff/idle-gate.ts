@@ -82,8 +82,11 @@ export function waitForIdle(gate: HandoffIdleGate, timeoutMs: number): Promise<b
       unsubscribe();
       resolve(idle);
     };
+    // Not unref'd: a session that never goes idle is exactly the case where this
+    // deadline is the only thing left on the loop, and an unref'd timer would let
+    // the loop drain before it fires — so the wait would never resolve. `finish`
+    // clears it on both paths, so it cannot outlive the wait it bounds.
     const timer = setTimeout(() => finish(false), timeoutMs);
-    timer.unref?.();
     const unsubscribe = gate.onIdle(() => finish(true));
   });
 }

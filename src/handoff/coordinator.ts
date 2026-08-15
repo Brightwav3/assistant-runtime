@@ -208,11 +208,22 @@ export class HandoffCoordinator {
   private emit(event: HandoffEvent): void { this.options.emit?.(event); }
 }
 
+/**
+ * The deadline is deliberately *not* unref'd.
+ *
+ * An unref'd timer does not keep the event loop alive, so when the runtime is
+ * waiting on nothing but this deadline — a replacement that never becomes ready,
+ * which is the case the deadline exists for — the loop drains and the timer never
+ * fires. The race then never settles and the handoff hangs, which is the opposite
+ * of what a timeout is for.
+ *
+ * Keeping it referenced is safe because `finally` clears it on every path, so it
+ * cannot outlive the attempt it bounds.
+ */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error("HANDOFF_READY_TIMEOUT")), ms);
-    timer.unref?.();
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

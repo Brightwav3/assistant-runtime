@@ -9,6 +9,8 @@ export * from "./delegation/delivery.js";
 export * from "./delegation/memory-tools.js";
 export * from "./delegation/intelligence-tool.js";
 export * from "./observability/usage-store.js";
+export * from "./handoff/contracts.js";
+export * from "./handoff/coordinator.js";
 export * from "./delegation/composition.js";
 export * from "./realtime-audio.js";
 export * from "./platform/index.js";

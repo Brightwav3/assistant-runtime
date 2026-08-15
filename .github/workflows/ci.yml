@@ -6,62 +6,51 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Assistant Runtime composes sibling cores and host tools through relative
-# file: dependencies, so CI reproduces the local directory layout before
-# installing.
+# Assistant Runtime composes nine sibling cores through relative `file:`
+# dependencies, so CI has to reproduce the directory layout before installing.
+#
+# The siblings come from the meta-repository's pinned submodule commits rather than
+# from each sibling's default branch. A submodule pointer is the record of which
+# versions are declared to work together; checking out whatever `main` happens to
+# be means a green run proves the combination worked at that moment, not that this
+# commit is sound.
+#
+# That is not hypothetical. On 2026-08-15 this job failed with twenty-seven
+# typecheck errors — EpisodeUncertainPart, RealtimeCore.open — because features
+# this repository already used lived in sibling commits that had never reached
+# their `main`. The commit under test was fine; the pinning was not.
+#
+# If a change here needs a newer sibling than the meta-repository records, this job
+# fails. That is correct: advance the submodule pointer, which is the step that
+# declares the new combination.
 jobs:
   verify:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the declared ecosystem
+        uses: actions/checkout@v7
         with:
-          path: assistant-runtime
-      - uses: actions/checkout@v7
+          repository: Brightwav3/Assistant-mark-II
+          submodules: recursive
+          path: eco
+
+      - name: Overlay the commit under test
+        uses: actions/checkout@v7
         with:
-          repository: Brightwav3/Jarvis-brain-core
-          path: core-runtime
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/activation-core
-          path: activation-core
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/Jarvis-speech-system
-          path: speech-system
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/intelligence-core
-          path: intelligence-core
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/memory-core
-          path: memory-core
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/aec-system
-          path: aec-system
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/state-core
-          path: state-core
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/tool-system
-          path: tool-system
-      - uses: actions/checkout@v7
-        with:
-          repository: Brightwav3/host-tools
-          ref: main
-          path: host-tools
+          path: eco/assistant-runtime
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+
       - name: Install ffmpeg
         run: choco install ffmpeg -y --no-progress
-      # Every core publishes its public entry from dist/, so a fresh checkout
-      # must be built before Assistant Runtime can resolve it.
+
+      # Every core publishes its public entry from dist/, so a fresh checkout must
+      # be built before Assistant Runtime can resolve it.
       - name: Build every core
         shell: bash
+        working-directory: eco
         run: |
           set -e
           for dir in tool-system core-runtime activation-core intelligence-core memory-core aec-system state-core "speech-system/realtime core" host-tools; do
@@ -69,9 +58,11 @@ jobs:
             (cd "$dir" && npm install --no-audit --no-fund && npm run build)
             echo "::endgroup::"
           done
+
       - name: Install dependencies
-        working-directory: assistant-runtime
+        working-directory: eco/assistant-runtime
         run: npm install --package-lock=false --no-audit --no-fund
+
       - name: Verify
-        working-directory: assistant-runtime
+        working-directory: eco/assistant-runtime
         run: npm run verify

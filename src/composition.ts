@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ActivationRuntime, DoubleClapProvider, type ClapListener } from "activation-core";
@@ -16,12 +17,15 @@ import { GeminiMemoryExtractor } from "./gemini-memory-extractor.js";
 import { MemoryExtractionOrchestrator } from "./memory-extraction.js";
 import { ToolSystemRealtimeToolExecutor } from "./tool-bridge.js";
 import { createDelegation, registerVoiceDelegationTool } from "./delegation/composition.js";
+import { createHandoffComposition, type HandoffComposition } from "./handoff/composition.js";
+import { createRealtimeHandoffController } from "./handoff/realtime-controller.js";
+import { RollingTranscript } from "./handoff/transcript.js";
 import { END_CONVERSATION_TOOL, endConversationDeclaration, endConversationHandler } from "./end-conversation-tool.js";
 import { RECORD_HEARD_TOOL, createRunHeardPath, recordHeardDeclaration, recordHeardHandler } from "./heard-debug-tool.js";
 import { createPlatformServices } from "./platform/factory.js";
 import type { PlatformServices } from "./platform/contracts.js";
 import type { ComponentHealth, RealtimeToolExecutor, RuntimeComponent, StatePublisher } from "./contracts.js";
-import type { DebugSettings, DelegationSettings, RuntimeSettings, UsageSettings } from "./config.js";
+import type { DebugSettings, DelegationSettings, HandoffSettings, RuntimeSettings, UsageSettings } from "./config.js";
 
 export interface AssistantComposition {
   runtime: AssistantRuntime;
@@ -209,6 +213,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   // A missing block means "off", never a crash on startup.
   const delegationSettings: DelegationSettings = settings.delegation ?? { enabled: false, provider: "gemini", model: "", fallbackModels: [], deadlineMs: 45_000, maximumModelCalls: 6, maximumToolCalls: 12, cancelOnSessionClose: true, defaultDelivery: "when_idle", lateResultPolicy: "queue" };
   const usageSettings: UsageSettings = settings.usage ?? { enabled: false, path: "", maxRecords: 10_000, unknownCostPolicy: "block", priceCatalogVersion: "unset" };
+  const handoffSettings: HandoffSettings = settings.handoff ?? { enabled: false, contextLimitTokens: 128_000, prepareThreshold: 0.7, readyTimeoutMs: 20_000, idleWaitTimeoutMs: 30_000 };
   const delegation = delegationSettings.enabled && memory
     ? createDelegation({
         delegation: delegationSettings,
@@ -246,6 +251,21 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       })
     : undefined);
   const echo = createEchoGuard(settings.echoCancellation, settings.realtime.inputSampleRate, settings.realtime.outputSampleRate, trace);
+
+  // The runtime holds the conversation; a session only renders it. Both the record a
+  // compaction reads and the estimate that triggers one live here, on this side of the
+  // session boundary, because that is where they still exist once a session is replaced.
+  const transcript = new RollingTranscript();
+  const publisherForHandoff = statePublisher(state, trace);
+  let logicalSessionId: string | undefined;
+  let handoff: HandoffComposition | undefined;
+  let outputStartedAtMs: number | undefined;
+  let userSpeechStartedAtMs: number | undefined;
+  // Compaction runs through the Delegation Broker, so without delegation there is nothing to
+  // compact with. Said once, at startup, rather than discovered at the context limit.
+  const handoffEnabled = handoffSettings.enabled && delegation !== undefined;
+  if (handoffSettings.enabled && !delegation) trace({ type: "handoff.disabled", reason: "delegation is required to compact a conversation" });
+
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
   const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: systemInstruction(delegation ? undefined : await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget), delegation !== undefined, settings.debug?.heard === true) }), (event) => {
     trace(event);
@@ -255,6 +275,34 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     if (type === "realtime.transcript.final" && event.source === "input") void publisher?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_started") void publisher?.set({ key: "speech.output", value: "speaking", source: { sourceType: "system", sourceId: settings.assistantId } });
     if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void publisher?.set({ key: "speech.output", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
+
+    // Both halves of the gate. The assistant not speaking is not enough: cutting over while
+    // the user is mid-sentence loses the half of the utterance the old session already has.
+    if (type === "realtime.input.speech_started") {
+      userSpeechStartedAtMs = Number(event.timestampMs);
+      handoff?.idle.markUserSpeechStarted();
+    }
+    // Audio is counted, not ignored. A voice conversation's context is mostly audio, and an
+    // estimate built from transcripts alone reads as nearly empty right up to termination.
+    if (type === "realtime.output.audio_started") outputStartedAtMs = Number(event.timestampMs);
+    if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") {
+      if (outputStartedAtMs !== undefined) handoff?.estimator.recordAudio({ durationMs: Number(event.timestampMs) - outputStartedAtMs });
+      outputStartedAtMs = undefined;
+    }
+    if (type === "realtime.transcript.final") {
+      const role = event.source === "input" ? "user" : "assistant";
+      const text = String(event.text ?? "");
+      transcript.record({ role, text });
+      handoff?.estimator.record({ role, text });
+      if (event.source === "input") {
+        if (userSpeechStartedAtMs !== undefined) handoff?.estimator.recordAudio({ durationMs: Number(event.timestampMs) - userSpeechStartedAtMs });
+        userSpeechStartedAtMs = undefined;
+        handoff?.idle.markUserSpeechFinished();
+      }
+      // Asked after every recorded turn, answered at most once per window. `run` is not
+      // awaited: the conversation must keep going for the whole of the preparation.
+      if (handoff?.maybePrepare()) void handoff.run().catch((error) => trace({ type: "handoff.run.failed", message: redact(error) }));
+    }
     // `when_idle` is only meaningful if something tells the scheduler when the assistant
     // is speaking. Without this it delivered immediately and could cut into a sentence.
     if (delegation && activeSessionId) {
@@ -263,15 +311,48 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     }
   }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player, echo);
 
+  // Bound to the *logical* session, not to the session that happens to be rendering it.
+  // After a commit `session.id` is a different string, and every delegation queued against
+  // the old one would be stranded at exactly the moment its answer is due.
+  realtime.onSession((session, capabilities, kind) => {
+    if (kind === "interaction" || !logicalSessionId) {
+      logicalSessionId = `lsn_${randomUUID()}`;
+      transcript.reset();
+      handoff?.dispose();
+      handoff = handoffEnabled && delegation
+        ? createHandoffComposition({
+            settings: handoffSettings,
+            assistantId: settings.assistantId,
+            logicalSessionId,
+            activePhysicalSessionId: session.id,
+            controller: createRealtimeHandoffController(realtime),
+            broker: delegation.broker,
+            transcript,
+            model: { provider: delegationSettings.provider, model: delegationSettings.model, fallbackModels: delegationSettings.fallbackModels },
+            compactionDeadlineMs: delegationSettings.deadlineMs,
+            output: delegation.delivery,
+            ...(publisherForHandoff ? { state: publisherForHandoff } : {}),
+            // The real guard, not a stand-in. A filter still adapted to the replaced
+            // playback path stops recognising the assistant's own voice, and the assistant
+            // starts answering itself while every other component reports success.
+            ...(echo ? { echo } : {}),
+            onCompacted: (context) => transcript.reset({ text: context }),
+            trace: (event) => trace({ ...event }),
+          })
+        : undefined;
+      trace({ type: "handoff.session.started", logicalSessionId, physicalSessionId: session.id, enabled: handoff !== undefined });
+    }
+    activeSessionId = logicalSessionId;
+    if (!delegation) return;
+    // Rebind rather than bind: a reconnect — and a handoff — must drain results that
+    // finished while the previous transport was gone, otherwise the user is left silently
+    // without an answer.
+    const contextInjection = capabilities.providers[0]?.contextInjection ?? false;
+    trace({ type: "delegation.session.bound", sessionId: logicalSessionId, physicalSessionId: session.id, kind, contextInjection });
+    void delegation.delivery.rebind({ sessionId: logicalSessionId, session, contextInjection });
+  });
+
   if (delegation) {
-    // Rebind rather than bind: a reconnect must drain results that finished while the
-    // previous transport was gone, otherwise the user is left silently without an answer.
-    realtime.onSession((session, capabilities) => {
-      activeSessionId = session.id;
-      const contextInjection = capabilities.providers[0]?.contextInjection ?? false;
-      trace({ type: "delegation.session.bound", sessionId: session.id, contextInjection });
-      void delegation.delivery.rebind({ sessionId: session.id, session, contextInjection });
-    });
     // Background work is activity. Without this the inactivity timer sees a quiet
     // session, closes it mid-delegation, and the answer the user is waiting for is
     // cancelled before it can be spoken.
@@ -312,7 +393,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       capabilities: async () => ({ ...(await memory.capabilities()) }),
     }] : []),
     ...(state ? [asDiagnosticComponent("state", state)] : []),
-    { id: "realtime", start: async () => undefined, stop: async () => realtime.stop(), health: () => realtime.health(), capabilities: () => realtime.capabilities() },
+    { id: "realtime", start: async () => undefined, stop: async () => { handoff?.dispose(); handoff = undefined; await realtime.stop(); }, health: () => realtime.health(), capabilities: () => realtime.capabilities() },
     playbackComponent,
     activation,
     microphoneComponent,

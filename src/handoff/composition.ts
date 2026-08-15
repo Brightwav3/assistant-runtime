@@ -1,14 +1,14 @@
 /**
  * Assembles the handoff parts into one object a composition root can hold.
  *
- * Deliberately *not* wired into `composition.ts` yet. The live path today binds delegation
- * delivery to the physical session id, which is the same thing as the logical id only for
- * as long as there is exactly one session per conversation. Introducing the logical id
- * there is a real change to a path that is verified on hardware and cannot be verified
- * here, so it is left for a change that can be tested where it runs.
+ * `composition.ts` builds one of these per interaction, and delegation delivery is bound to
+ * `logicalSessionId` rather than to the session that happens to be rendering it. That
+ * binding is the reason this assembly can exist at all: a physical id changes at every
+ * commit, and every queued delegation keyed to it would be stranded.
  *
- * What this file does provide is the whole assembly, tested, so that wiring is a matter of
- * calling one function and rebinding delivery to `logicalSessionId`.
+ * Whether the cutover is inaudible on real hardware is not decided here, and cannot be
+ * decided from a development machine. What is decided here is that nothing is left half
+ * owned: one attempt at a time, one terminal outcome, one owner of audio at every instant.
  */
 
 import type { DelegationBroker, DelegationModelSelection, StatePublisher } from "../contracts.js";
@@ -43,6 +43,13 @@ export interface HandoffCompositionOptions {
   output: OutputIdleSource;
   state?: StatePublisher;
   echo?: EchoReferenceOwner;
+  /**
+   * Receives the compacted context the replacement was prefilled with, at the moment it is
+   * produced. The runtime's own record of the conversation is reseeded from it, so that the
+   * next compaction summarizes this summary and what followed rather than a window nothing
+   * holds any more.
+   */
+  onCompacted?: (context: string) => void;
   trace?: (event: HandoffEvent) => void;
 }
 
@@ -86,6 +93,7 @@ export function createHandoffComposition(options: HandoffCompositionOptions): Ha
     context: {
       compact: async (identity) => {
         lastCompacted = await compaction.compact(identity);
+        options.onCompacted?.(lastCompacted);
         return lastCompacted;
       },
     },

@@ -56,7 +56,7 @@ async function assembly(enabled = true) {
   const events: HandoffEvent[] = [];
 
   const composition = createHandoffComposition({
-    settings: { enabled, contextLimitTokens: 10_000, prepareThreshold: 0.7, readyTimeoutMs: 10_000, idleWaitTimeoutMs: 10_000 },
+    settings: { enabled, contextLimitTokens: 10_000, prepareThreshold: 0.7, readyTimeoutMs: 1_000, idleWaitTimeoutMs: 1_000 },
     assistantId: "assistant.primary",
     logicalSessionId: "logical-1",
     activePhysicalSessionId: harness.initialSessionId,

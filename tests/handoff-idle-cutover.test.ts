@@ -16,16 +16,7 @@ import { SessionIdleGate, waitForIdle, type HandoffIdleGate } from "../src/hando
 import type { HandoffEvent } from "../src/handoff/contracts.js";
 import { createHarness } from "./handoff-harness.js";
 
-/**
- * The budgets below are generous on purpose. They are real wall-clock deadlines,
- * and `node --test` runs test files in parallel, so a tight budget on a loaded CI
- * runner expires from scheduling latency rather than from the behaviour under
- * test — which surfaced as twenty-two tests cancelled, not failed.
- *
- * Tests that deliberately exercise a firing deadline set their own short value;
- * see handoff-observability.test.ts.
- */
-async function fixture(idle: HandoffIdleGate, idleWaitTimeoutMs = 1_000) {
+async function fixture(idle: HandoffIdleGate, idleWaitTimeoutMs = 100) {
   const harness = await createHarness();
   const events: HandoffEvent[] = [];
   const handoff = new HandoffCoordinator({
@@ -34,7 +25,7 @@ async function fixture(idle: HandoffIdleGate, idleWaitTimeoutMs = 1_000) {
     controller: harness.controller,
     context: harness.context,
     emit: (event) => events.push(event),
-    readyTimeoutMs: 10_000,
+    readyTimeoutMs: 1_000,
     idle,
     idleWaitTimeoutMs,
   });

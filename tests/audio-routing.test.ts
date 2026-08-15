@@ -56,6 +56,20 @@ test("a 100 ms capture chunk is sent as five 20 ms realtime frames", async () =>
   await session.close();
 });
 
+test("the local input-transcription hook receives a continuous 20 ms audio timeline", async () => {
+  const provider = new DelayedProvider();
+  const frames: AudioFrame[] = [];
+  const core = { connect: (config: RealtimeSessionConfig) => provider.connect(config), capabilities: () => provider.capabilities(), health: () => provider.health() };
+  const adapter = new RealtimeCoreAdapter(core as never, { provider: "fake", inputFormat: { sampleRate: 16000, channels: 1, sampleFormat: "pcm_s16le", frameDurationMs: 20 } }, undefined, undefined, undefined, undefined, undefined, (frame) => frames.push(frame));
+  const opening = adapter.open();
+  provider.release();
+  const session = await opening;
+  await adapter.sendMicrophonePcm(new Int16Array(1600).fill(11));
+  assert.equal(frames.length, 5);
+  assert.deepEqual(frames.map((frame, index) => frame.timestampMs - frames[0]!.timestampMs), [0, 20, 40, 60, 80]);
+  await session.close();
+});
+
 test("pending input keeps only the newest 500 ms and reports dropped frames", async () => {
   const provider = new DelayedProvider();
   const events: Record<string, unknown>[] = [];

@@ -1,7 +1,5 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
 import { REALTIME_INPUT_FORMAT, RealtimeCore, type AudioFrame, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
-import { IntelligenceRuntime } from "intelligence-core";
-import { VoiceRuntime } from "voice-core";
 import { spawn } from "node:child_process";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RealtimeToolExecutor, RuntimeComponent } from "./contracts.js";
 import type { PcmPlayerSpec } from "./platform/contracts.js";
@@ -378,7 +376,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     let result: { content: string; isError?: boolean };
     let executionFailed = false;
     try {
-      result = this.toolExecutor ? await this.toolExecutor.execute({ callId: event.callId, tool: event.tool, arguments: event.arguments, signal }) : { content: "No realtime tool executor is configured.", isError: true };
+      result = this.toolExecutor ? await this.toolExecutor.execute({ callId: event.callId, tool: event.tool, arguments: event.arguments, sessionId: session.id, signal }) : { content: "No realtime tool executor is configured.", isError: true };
     } catch (error) {
       if (signal?.aborted || this.active !== session) {
         this.toolCancelled += 1;
@@ -444,16 +442,6 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
 
   private redact(value: string): string {
     return value.replace(/(api[_-]?key|authorization|token|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]");
-  }
-}
-
-/** Public Intelligence and Voice contracts form the output half of modular mode. */
-export class IntelligenceVoiceAdapter {
-  constructor(private readonly intelligence: IntelligenceRuntime, private readonly voice: VoiceRuntime) {}
-  async respond(input: { interactionId: string; text: string }): Promise<void> {
-    const result = await this.intelligence.execute({ request_id: input.interactionId, session_id: input.interactionId, input: { type: "text", text: input.text } });
-    const text = result.outputs.find((output): output is { type: "text"; text: string } => output.type === "text")?.text;
-    if (text) await this.voice.speak({ requestId: input.interactionId, text });
   }
 }
 

@@ -55,3 +55,14 @@ test("runtime settings load the env file next to config.json", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("rejects the retired modular mode", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "assistant-settings-native-only-"));
+  const configPath = join(directory, "config.json");
+  try {
+    await writeFile(configPath, JSON.stringify({ mode: "modular", memory: { enabled: false } }), "utf8");
+    await assert.rejects(() => loadRuntimeSettings(configPath), /mode must be native_realtime/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

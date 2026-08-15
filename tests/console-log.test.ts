@@ -29,7 +29,7 @@ test("human trace keeps lifecycle, input, and tool messages readable", () => {
     "Nástroje: calculate, get_time.",
     "Aktivace zachycena.",
     "Gemini připojeno.",
-    "Ty: Kolik je dva plus dva?",
+    "Slyšel jsem: Kolik je dva plus dva?",
     "Používám nástroj: calculate.",
     "Nástroj dokončen.",
   ]);

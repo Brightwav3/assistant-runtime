@@ -5,16 +5,21 @@ import { isAbsolute, resolve } from "node:path";
 
 export interface RuntimeSettings {
   assistantId: string;
-  mode: "native_realtime" | "modular";
+  mode: "native_realtime";
   inactivityMs: number;
   activation: { provider: "double_clap"; sourceId: string; device?: string; minimumIntervalMs: number; maximumIntervalMs: number; amplitudeThreshold: number };
   realtime: { provider: "gemini"; model?: string; voice?: string; inputSampleRate: number; outputSampleRate: number };
-  inputTranscription: { enabled: boolean; language: string; cliPath?: string; modelPath?: string; threads?: number };
   memory: { enabled: boolean; path: string; scopeSubjectId: string; retrievalLimit?: number; retrievalTokenBudget?: number; episodeRetentionDays?: number };
   state: { enabled: boolean };
+  debug?: DebugSettings;
   echoCancellation: EchoCancellationSettings;
   delegation: DelegationSettings;
   usage: UsageSettings;
+}
+
+export interface DebugSettings {
+  heard: boolean;
+  path: string;
 }
 
 /**
@@ -151,9 +156,9 @@ const defaults: RuntimeSettings = {
   inactivityMs: 30_000,
   activation: { provider: "double_clap", sourceId: "local-default-microphone", minimumIntervalMs: 150, maximumIntervalMs: 700, amplitudeThreshold: 0.18 },
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
-  inputTranscription: { enabled: true, language: "cs" },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
+  debug: { heard: false, path: "..\\.runtime\\heard.jsonl" },
   echoCancellation: { enabled: true, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 2, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
   delegation: {
     enabled: false,
@@ -186,17 +191,18 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
     ...raw,
     activation: { ...defaults.activation, ...(raw.activation ?? {}) },
     realtime: { ...defaults.realtime, ...(raw.realtime ?? {}) },
-    inputTranscription: { ...defaults.inputTranscription, ...(raw.inputTranscription ?? {}) },
     memory: { ...defaults.memory, ...(raw.memory ?? {}) },
     state: { ...defaults.state, ...(raw.state ?? {}) },
+    debug: { heard: raw.debug?.heard ?? defaults.debug!.heard, path: raw.debug?.path ?? defaults.debug!.path },
     echoCancellation: { ...defaults.echoCancellation, ...(raw.echoCancellation ?? {}) },
     delegation: { ...defaults.delegation, ...(raw.delegation ?? {}) },
     usage: { ...defaults.usage, ...(raw.usage ?? {}) },
   };
   if (!settings.assistantId || !Number.isFinite(settings.inactivityMs) || settings.inactivityMs < 1) throw new Error("assistantId and a positive inactivityMs are required.");
-  if (settings.mode !== "native_realtime" && settings.mode !== "modular") throw new Error("mode must be native_realtime or modular.");
+  if (settings.mode !== "native_realtime") throw new Error("mode must be native_realtime.");
   if (settings.memory.enabled && !settings.memory.path) throw new Error("memory.path is required when memory is enabled.");
   if (settings.memory.enabled && !isAbsolute(settings.memory.path)) settings.memory.path = resolve(basePath, settings.memory.path);
+  if (settings.debug && !isAbsolute(settings.debug.path)) settings.debug.path = resolve(basePath, settings.debug.path);
   const echo = settings.echoCancellation;
   if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "cancel_or_suppress") throw new Error("echoCancellation.processor must be adaptive, gate, or cancel_or_suppress.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");

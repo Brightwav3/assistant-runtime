@@ -68,7 +68,7 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
 
     if (type === "realtime.transcript.final" && event.source === "input") {
       const text = asText(event.text).trim();
-      if (text) print(`Ty: ${text}`);
+      if (text) print(`Slyšel jsem: ${text}`);
       return;
     }
 
@@ -176,7 +176,7 @@ export function createHumanTrace(writeLine: ConsoleLineWriter = (line) => proces
       return;
     }
 
-    if (type === "tools.install.failed" || type === "realtime.connect.failed" || type === "realtime.greeting.failed" || type === "realtime.input.failed" || type === "realtime.tool.result.failed" || type === "realtime.session.error" || type === "playback.error" || type === "playback.stdin.error" || type === "runtime.error" || type === "modular.error") {
+    if (type === "tools.install.failed" || type === "realtime.connect.failed" || type === "realtime.greeting.failed" || type === "realtime.input.failed" || type === "realtime.tool.result.failed" || type === "realtime.session.error" || type === "playback.error" || type === "playback.stdin.error" || type === "runtime.error") {
       print(`CHYBA: ${asText(event.message) || "neznámá chyba"}`);
     }
   };

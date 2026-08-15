@@ -116,7 +116,7 @@ Memory, State, and safe Host Tools components together.
 - Default memory path is the Jarvis-root `.runtime\\memory.sqlite`, outside the assistant-runtime repository.
 - Interaction, speech, and runtime-error facts publish through State Core.
 - Microphone PCM arriving during realtime connection is bounded and flushed after connect; idle PCM is not persisted.
-- `mode: "modular"` composes public Scribe, Intelligence, and Voice contracts with Memory context passed through `MemoryContextAdapter`.
+- The production composition is intentionally native-only: Gemini Live owns speech recognition and response audio; the retired modular Scribe → Intelligence → Voice path is no longer wired into this runtime.
 - Native inactivity timeout resets on speech activity; provider-closed sessions clear stale microphone routing without unhandled rejections.
 - Native realtime input is split into 320-sample/20 ms frames; pre-connect audio retains only the newest 500 ms and reports dropped frames.
 - Realtime tool calls use `ToolSystemRealtimeToolExecutor`; the default composition advertises the safe read-only `get_time`, `calculate`, `uptime`, and `system_status` catalogue, while side-effecting tools remain opt-in.
@@ -125,7 +125,6 @@ Memory, State, and safe Host Tools components together.
 
 ## Next iteration
 
-- Implement and verify the config-selectable Scribe → Intelligence → Voice live path.
 - Keep the explicit Calculator `open_app` probe in [the separate procedure](./docs/realtime-tools-smoke-test.md); it is not part of the safe default catalogue.
 
 ## Known limitations
@@ -133,15 +132,13 @@ Memory, State, and safe Host Tools components together.
 - Real microphones can still occasionally lose speech detection.
 - After `realtime.session.closed`, a new activation is required; automatic session reopening is not implemented yet.
 - Conversation memory stores compact summaries, but does not yet infer intelligent preferences or facts automatically.
-- The modular Scribe → Intelligence → Voice path has offline boundary coverage but is not fully hardware-verified.
 - The explicit Calculator `open_app` realtime probe remains a separate side-effect smoke test and was not part of the Mark I hardware run.
 
 ## Explicit operational nuance
 
-The modular end-to-end check still requires a local microphone, speaker,
-`ffplay.exe`, and `GEMINI_API_KEY`. It is not represented as a passing
-automated test because those external resources are not deterministic in the
-offline suite.
+The native Gemini Live end-to-end check requires a local microphone, speaker,
+`ffplay.exe`, and `GEMINI_API_KEY`. It is not represented as a passing automated
+test because those external resources are not deterministic in the offline suite.
 
 ## Delegated voice intelligence (Mark II)
 

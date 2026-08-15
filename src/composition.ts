@@ -1,5 +1,5 @@
-import { access, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { ActivationRuntime, DoubleClapProvider, type ClapListener } from "activation-core";
 import { installCatalogue, nodeSystemProbe, nodeUptimeSource } from "host-tools";
 import { MemoryRuntime, SqliteMemoryStore } from "memory-core";
@@ -11,17 +11,17 @@ import { AllowlistPolicy, ToolRegistry, ToolRuntime } from "tool-system";
 import { AssistantRuntime } from "./runtime.js";
 import { ActivationCoreAdapter, RealtimeCoreAdapter, asDiagnosticComponent } from "./adapters.js";
 import { createEchoGuard } from "./echo-cancellation.js";
-import { EpisodeMemoryWriter } from "./episode-memory.js";
+import { EpisodeMemoryWriter, type HeardInput } from "./episode-memory.js";
+import { GeminiMemoryExtractor } from "./gemini-memory-extractor.js";
 import { MemoryExtractionOrchestrator } from "./memory-extraction.js";
-import { ModularSpeechDriver } from "./modular.js";
 import { ToolSystemRealtimeToolExecutor } from "./tool-bridge.js";
 import { createDelegation, registerVoiceDelegationTool } from "./delegation/composition.js";
 import { END_CONVERSATION_TOOL, endConversationDeclaration, endConversationHandler } from "./end-conversation-tool.js";
+import { RECORD_HEARD_TOOL, createRunHeardPath, recordHeardDeclaration, recordHeardHandler } from "./heard-debug-tool.js";
 import { createPlatformServices } from "./platform/factory.js";
-import { EnergyVad, RealtimeInputTranscriber, UtteranceSegmenter, WhisperCliProvider, type VoiceEvent } from "scribe-core";
 import type { PlatformServices } from "./platform/contracts.js";
 import type { ComponentHealth, RealtimeToolExecutor, RuntimeComponent, StatePublisher } from "./contracts.js";
-import type { DelegationSettings, RuntimeSettings, UsageSettings } from "./config.js";
+import type { DebugSettings, DelegationSettings, RuntimeSettings, UsageSettings } from "./config.js";
 
 export interface AssistantComposition {
   runtime: AssistantRuntime;
@@ -69,13 +69,21 @@ const SYSTEM_PERSONA = [
   "Pokud uživatel potvrzení odmítne nebo mluví dál, pokračuj normálně a nástroj nevolej.",
 ].join(" ");
 
+const HEARD_DEBUG_INSTRUCTION = [
+  "DIAGNOSTICKÝ REŽIM: po každé uživatelské promluvě jednou zavolej nástroj record_heard.",
+  "Do verbatim napiš nejlepší doslovnou rekonstrukci slov, která jsi slyšel, bez parafráze.",
+  "Do meaning napiš česky, co si myslíš, že uživatel významově řekl.",
+  "Do language napiš zjištěný jazyk a do uncertain_parts uveď nejistá slova oddělená čárkou.",
+  "Tento nástroj je pouze diagnostický, nikdy ho nezmiňuj nahlas a jeho výsledek nesmí změnit odpověď.",
+].join(" ");
+
 /**
  * The *voice* catalogue. When delegation is on it shrinks rather than grows: the voice
  * model gets delegation plus the one conversation-control tool, and the lookup tools move
  * behind the delegated model. Advertising both would let the voice model answer inline
  * and never delegate, which is the failure this whole feature exists to avoid.
  */
-function createDefaultToolRuntime(trace: (event: Record<string, unknown>) => void, registerDelegation?: (registry: ToolRegistry) => string): ToolRuntime {
+async function createDefaultToolRuntime(trace: (event: Record<string, unknown>) => void, registerDelegation?: (registry: ToolRegistry) => string, debug?: DebugSettings, onHeard?: (input: HeardInput) => Promise<void>): Promise<ToolRuntime> {
   const registry = new ToolRegistry();
   // Registration, not just the allowlist, is what the model sees: `discover()` reports the
   // whole registry. Installing the host catalogue and merely denying it would still put
@@ -85,10 +93,29 @@ function createDefaultToolRuntime(trace: (event: Record<string, unknown>) => voi
     ? []
     : installCatalogue(registry, { uptime: nodeUptimeSource(), system: nodeSystemProbe() }).failed;
   const endConversation = registry.register(endConversationDeclaration(), endConversationHandler());
-  const problems = [...failed, ...(endConversation ? [endConversation] : [])];
+  const heardPath = debug?.heard ? await createRunHeardPath(debug.path) : undefined;
+  const heard = heardPath ? registry.register(recordHeardDeclaration(), recordHeardHandler({
+    path: heardPath,
+    onRecord: async (record) => {
+      if (!record.session_id) {
+        trace({ type: "memory.heard.unbound", heardId: record.heard_id });
+        return;
+      }
+      await onHeard?.({
+        heardId: record.heard_id,
+        sessionId: record.session_id,
+        verbatim: record.verbatim,
+        meaning: record.meaning,
+        language: record.language,
+        uncertainParts: record.uncertain_parts,
+      });
+    },
+  })) : null;
+  const problems = [...failed, ...(endConversation ? [endConversation] : []), ...(heard ? [heard] : [])];
   if (problems.length > 0) trace({ type: "tools.install.failed", tools: problems.map((failure) => failure.message) });
   const delegateTool = registerDelegation?.(registry);
   const allow = delegateTool ? [delegateTool, END_CONVERSATION_TOOL] : [...DEFAULT_REALTIME_TOOLS];
+  if (debug?.heard && !heard) allow.push(RECORD_HEARD_TOOL);
   trace({ type: "tools.voice.catalogue", tools: allow });
   return new ToolRuntime({ registry, policy: new AllowlistPolicy({ allow }) });
 }
@@ -154,45 +181,10 @@ const DELEGATION_INSTRUCTION = [
  * delegation still produced a confident, correct-sounding answer, so the failure was
  * invisible until the trace was read.
  */
-function systemInstruction(memoryLines: string | undefined, delegationEnabled = false): string {
+function systemInstruction(memoryLines: string | undefined, delegationEnabled = false, heardDebugEnabled = false): string {
   const persona = delegationEnabled ? `${SYSTEM_PERSONA} ${DELEGATION_INSTRUCTION}` : SYSTEM_PERSONA;
-  return memoryLines ? `${persona}\n\n${memoryLines}` : persona;
-}
-
-async function createLocalInputTranscriber(settings: RuntimeSettings, trace: (event: Record<string, unknown>) => void, onEvent: (event: Extract<VoiceEvent, { type: "speech.started" | "transcription.final" | "voice.error" }>) => void): Promise<RealtimeInputTranscriber | undefined> {
-  const inputSettings = settings.inputTranscription ?? { enabled: false, language: "cs" };
-  if (!inputSettings.enabled || settings.mode !== "native_realtime" || process.platform !== "win32") return undefined;
-  const runtimeDirs = [
-    resolve(process.cwd(), "speech-system", "scribe core", "runtime"),
-    resolve(process.cwd(), "..", "speech-system", "scribe core", "runtime"),
-  ];
-  const configuredCli = inputSettings.cliPath ?? process.env.VOICE_STT_CLI;
-  const configuredModel = inputSettings.modelPath ?? process.env.VOICE_STT_MODEL;
-  let cliPath = configuredCli ?? resolve(runtimeDirs[0]!, "Release", "whisper-cli.exe");
-  let modelPath = configuredModel ?? resolve(runtimeDirs[0]!, "ggml-small.bin");
-  if (!configuredCli && !configuredModel) {
-    for (const runtimeDir of runtimeDirs) {
-      const candidateCli = resolve(runtimeDir, "Release", "whisper-cli.exe");
-      const candidateModel = resolve(runtimeDir, "ggml-small.bin");
-      try { await access(candidateCli); await access(candidateModel); cliPath = candidateCli; modelPath = candidateModel; break; } catch { /* try the next workspace layout */ }
-    }
-  }
-  try {
-    await access(cliPath);
-    await access(modelPath);
-  } catch {
-    trace({ type: "realtime.input_transcription.unavailable", timestampMs: Date.now(), provider: "whisper", cliPath, modelPath });
-    return undefined;
-  }
-  const language = process.env.VOICE_STT_LANGUAGE?.trim() || inputSettings.language;
-  trace({ type: "realtime.input_transcription.ready", timestampMs: Date.now(), provider: "whisper", language, cliPath, modelPath });
-  return new RealtimeInputTranscriber({
-    stt: new WhisperCliProvider({ cliPath, modelPath, ...(inputSettings.threads === undefined ? {} : { threads: inputSettings.threads }) }),
-    language,
-    vad: new EnergyVad({ threshold: 0.02, endSilenceMs: 240, speechHoldMs: 80 }),
-    segmenter: new UtteranceSegmenter({ minSpeechMs: 160, maxUtteranceMs: 20_000, preRollFrames: 8, continuationMs: 120 }),
-    onEvent,
-  });
+  const instruction = heardDebugEnabled ? `${persona} ${HEARD_DEBUG_INSTRUCTION}` : persona;
+  return memoryLines ? `${instruction}\n\n${memoryLines}` : instruction;
 }
 
 export async function createAssistantRuntime(settings: RuntimeSettings, trace: (event: Record<string, unknown>) => void = () => {}, options: AssistantCompositionOptions = {}): Promise<AssistantComposition> {
@@ -203,8 +195,6 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   const state = settings.state.enabled ? new StateRuntime() : undefined;
   const memory = settings.memory.enabled ? new MemoryRuntime({ store: new SqliteMemoryStore({ path: settings.memory.path }) }) : undefined;
   const episodes = memory ? new EpisodeRuntime({ store: new SqliteEpisodeStore({ path: settings.memory.path }) }) : undefined;
-  const extraction = memory ? new MemoryExtractionOrchestrator(memory, new DeterministicMemoryExtractor(), trace) : undefined;
-  const episodeMemory = episodes ? new EpisodeMemoryWriter({ episodes, subjectId: settings.memory.scopeSubjectId, extractor: extraction, trace }) : undefined;
   if (memory) await mkdir(dirname(settings.memory.path), { recursive: true });
 
   const clap = new DoubleClapProvider({ id: "double-clap", minimumIntervalMs: settings.activation.minimumIntervalMs, maximumIntervalMs: settings.activation.maximumIntervalMs, amplitudeThreshold: settings.activation.amplitudeThreshold });
@@ -232,15 +222,22 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     : undefined;
   if (delegationSettings.enabled && !memory) trace({ type: "delegation.disabled", reason: "memory is required for delegated recall" });
 
+  const memoryExtractor = delegation
+    ? new GeminiMemoryExtractor({ models: delegation.modelExecutor, providerId: delegationSettings.provider, model: delegationSettings.model, trace })
+    : new DeterministicMemoryExtractor();
+  const extraction = memory ? new MemoryExtractionOrchestrator(memory, memoryExtractor, trace) : undefined;
+  const heardInputEnabled = settings.debug?.heard === true && !options.realtimeToolExecutor;
+  const episodeMemory = episodes ? new EpisodeMemoryWriter({ episodes, subjectId: settings.memory.scopeSubjectId, extractor: extraction, preferHeardInput: heardInputEnabled, trace }) : undefined;
+
   const tools = options.realtimeToolExecutor
     ? undefined
-    : createDefaultToolRuntime(trace, delegation ? (registry) => registerVoiceDelegationTool(registry, delegation, {
+    : await createDefaultToolRuntime(trace, delegation ? (registry) => registerVoiceDelegationTool(registry, delegation, {
         delegation: delegationSettings,
         usage: usageSettings,
         memory: memory!,
         subjectId: settings.memory.scopeSubjectId,
         correlation: () => (activeSessionId ? { sessionId: activeSessionId } : {}),
-      }) : undefined);
+      }) : undefined, settings.debug, async (input) => { await episodeMemory?.handleHeard(input); });
   const realtimeToolExecutor = options.realtimeToolExecutor ?? (tools
     ? new ToolSystemRealtimeToolExecutor(tools, (request) => {
         if (request.action !== "shutdown") return;
@@ -249,37 +246,8 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       })
     : undefined);
   const echo = createEchoGuard(settings.echoCancellation, settings.realtime.inputSampleRate, settings.realtime.outputSampleRate, trace);
-  const localInputEvents = (event: Extract<VoiceEvent, { type: "speech.started" | "transcription.final" | "voice.error" }>) => {
-    if (event.type === "speech.started") {
-      trace({ type: "realtime.input.speech_started", timestampMs: Date.now(), sessionId: event.sessionId, transcriptionProvider: "whisper" });
-      return;
-    }
-    if (event.type === "transcription.final") {
-      const transcript = { type: "transcript.final" as const, sessionId: event.sessionId, text: event.text, source: "input" as const, timestampMs: event.endedAtMs };
-      trace({ type: "realtime.transcript.final", timestampMs: transcript.timestampMs, sessionId: transcript.sessionId, text: transcript.text, source: transcript.source, transcriptionProvider: "whisper", language: event.language, recognitionLatencyMs: event.recognitionLatencyMs });
-      void episodeMemory?.handle(transcript);
-      void statePublisher(state, trace)?.set({ key: "speech.input", value: "idle", source: { sourceType: "system", sourceId: settings.assistantId } });
-      return;
-    }
-    trace({ type: "realtime.input_transcription.failed", timestampMs: Date.now(), sessionId: event.sessionId, code: event.code, message: event.message, transcriptionProvider: "whisper" });
-  };
-  const inputTranscriber = await createLocalInputTranscriber(settings, trace, localInputEvents);
-  let inputTranscriptionSessionId: string | undefined;
-  const stopInputTranscription = (sessionId: string) => {
-    if (inputTranscriptionSessionId !== sessionId) return;
-    inputTranscriptionSessionId = undefined;
-    void inputTranscriber?.stop();
-  };
-  const onInputFrame = inputTranscriber ? (frame: import("realtime-core").AudioFrame, sessionId: string) => {
-    if (inputTranscriptionSessionId !== sessionId) {
-      if (inputTranscriptionSessionId) void inputTranscriber.stop();
-      inputTranscriptionSessionId = sessionId;
-      try { inputTranscriber.startSession(sessionId); } catch (error) { trace({ type: "realtime.input_transcription.start_failed", timestampMs: Date.now(), sessionId, message: redact(error) }); return; }
-    }
-    void inputTranscriber.push(frame).catch((error) => trace({ type: "realtime.input_transcription.frame_failed", timestampMs: Date.now(), sessionId, message: redact(error) }));
-  } : undefined;
   const realtimeCore = new RealtimeCore(new GeminiLiveProvider());
-  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, inputTranscription: inputTranscriber ? false : undefined, systemInstruction: systemInstruction(delegation ? undefined : await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget), delegation !== undefined) }), (event) => {
+  const realtime = new RealtimeCoreAdapter(realtimeCore, async () => ({ provider: settings.realtime.provider, model: settings.realtime.model, ...(settings.realtime.voice ? { voice: settings.realtime.voice } : {}), inputFormat: { ...REALTIME_INPUT_FORMAT }, systemInstruction: systemInstruction(delegation ? undefined : await memoryInstruction(memory, settings.memory.scopeSubjectId, settings.memory.retrievalLimit, settings.memory.retrievalTokenBudget), delegation !== undefined, settings.debug?.heard === true) }), (event) => {
     trace(event);
     const type = String(event.type);
     const publisher = statePublisher(state, trace);
@@ -293,7 +261,7 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       if (type === "realtime.output.audio_started") delegation.delivery.markOutputStarted(activeSessionId);
       if (type === "realtime.output.audio_completed" || type === "realtime.output.interrupted") void delegation.delivery.markOutputFinished(activeSessionId);
     }
-  }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player, echo, onInputFrame, stopInputTranscription);
+  }, (event) => void episodeMemory?.handle(event), realtimeToolExecutor, platform.player, echo);
 
   if (delegation) {
     // Rebind rather than bind: a reconnect must drain results that finished while the
@@ -311,10 +279,8 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       if (event.type === "delegation.created" || event.type === "delegation.progress" || event.type === "delegation.completed") realtime.signalActivity();
     });
   }
-  const modular = settings.mode === "modular" && platformAvailable ? new ModularSpeechDriver({ speech: platform.createSpeechStack(), memory, memorySubjectId: settings.memory.scopeSubjectId, memoryRetrieval: { limit: settings.memory.retrievalLimit, tokenBudget: settings.memory.retrievalTokenBudget }, trace }) : undefined;
-
   const microphone: ClapListener | undefined = platformAvailable
-    ? platform.createActivationListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { if (settings.mode === "native_realtime") void realtime.sendMicrophonePcm(frame); modular?.pushMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) })
+    ? platform.createActivationListener(clap, { sourceId: settings.activation.sourceId, device: settings.activation.device, onFrame: (frame) => { void realtime.sendMicrophonePcm(frame); }, ...(options.microphoneFactory ? { microphoneFactory: options.microphoneFactory } : {}) })
     : undefined;
   const microphoneComponent: RuntimeComponent = microphone
     ? { id: "microphone", start: () => microphone.start(), stop: () => microphone.stop(), health: async (): Promise<ComponentHealth> => ({ state: microphone.isRunning() ? "healthy" : "unhealthy" }), capabilities: async () => ({ pcmInput: true, rawAudioPersistence: false, platform: platform.id }) }
@@ -346,14 +312,12 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       capabilities: async () => ({ ...(await memory.capabilities()) }),
     }] : []),
     ...(state ? [asDiagnosticComponent("state", state)] : []),
-    ...(settings.mode === "modular"
-      ? [modular ? asDiagnosticComponent("modular", modular) : unavailableComponent("modular", platformReason, { platform: platform.id })]
-      : [{ id: "realtime", start: async () => undefined, stop: async () => realtime.stop(), health: () => realtime.health(), capabilities: () => realtime.capabilities() }]),
+    { id: "realtime", start: async () => undefined, stop: async () => realtime.stop(), health: () => realtime.health(), capabilities: () => realtime.capabilities() },
     playbackComponent,
     activation,
     microphoneComponent,
   ];
   const publisher = statePublisher(state, trace);
-  const runtime = new AssistantRuntime({ assistantId: settings.assistantId, mode: settings.mode, inactivityMs: settings.inactivityMs, state: publisher }, { components, activation, nativeRealtime: settings.mode === "native_realtime" ? realtime : undefined, modular });
+  const runtime = new AssistantRuntime({ assistantId: settings.assistantId, mode: settings.mode, inactivityMs: settings.inactivityMs, state: publisher }, { components, activation, nativeRealtime: realtime });
   return { runtime, memory, state, tools, components, platform, shutdownRequested };
 }

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import test from "node:test";
 import { createAssistantRuntime } from "../src/composition.js";
 import { createPlatformServices, normalizePlatform } from "../src/platform/factory.js";
-import { PlatformUnsupportedError } from "../src/platform/contracts.js";
 import type { RuntimeSettings } from "../src/config.js";
 
 // No microphone, speaker, API key, or network is touched by anything in this file.
@@ -44,7 +43,6 @@ for (const id of ["darwin", "linux"] as const) {
     // Break caught: a placeholder that reports "supported" would let the runtime
     // claim a microphone it does not have.
     assert.ok(platform.capability.reason, "an unsupported platform must explain why");
-    assert.throws(() => platform.createSpeechStack(), PlatformUnsupportedError);
   });
 }
 
@@ -60,22 +58,6 @@ test("an unsupported platform degrades the audio components rather than crashing
     const capabilities = await composition.components.find((component) => component.id === "microphone")!.capabilities!();
     assert.equal(capabilities.available, false);
     assert.equal(capabilities.pcmInput, false);
-  } finally {
-    await composition.runtime.stop();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("modular mode on an unsupported platform reports a degraded modular component", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "assistant-runtime-platform-modular-"));
-  const composition = await createAssistantRuntime({ ...settingsFor(join(directory, "memory.sqlite")), mode: "modular" }, undefined, { platform: createPlatformServices("linux") });
-  try {
-    await composition.runtime.start();
-    const health = await composition.runtime.health();
-    assert.equal(health.components.modular?.state, "degraded");
-    // Break caught: falling through to the realtime component would silently
-    // change the interaction mode the operator asked for.
-    assert.equal(health.components.realtime, undefined);
   } finally {
     await composition.runtime.stop();
     await rm(directory, { recursive: true, force: true });

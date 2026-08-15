@@ -1,4 +1,4 @@
-export type InteractionMode = "native_realtime" | "modular";
+export type InteractionMode = "native_realtime";
 export type InteractionState = "idle" | "activating" | "active" | "ending" | "failed";
 export type HealthState = "healthy" | "degraded" | "unhealthy";
 
@@ -12,15 +12,14 @@ export interface ActivationSource extends RuntimeComponent { subscribe(handler: 
 export interface NativeRealtimeDriver { open(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<{ close(): Promise<void>; done: Promise<void> }> }
 export interface RealtimeToolExecutor {
   discover(): Promise<RealtimeToolDeclaration[]>;
-  execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }>;
+  execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; sessionId?: string; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }>;
 }
-export interface ModularDriver { run(input: { interactionId: string; signal: AbortSignal; onActivity?: () => void }): Promise<void> }
 export interface StatePublisher { set(input: { key: string; value: string | boolean; source: { sourceType: "system"; sourceId: string } }): Promise<unknown> }
 export interface RuntimeConfig { assistantId: string; mode: InteractionMode; inactivityMs: number; state?: StatePublisher }
 export interface InteractionStatus { interactionId: string; activationId?: string; mode: InteractionMode; state: InteractionState; startedAt: string }
 export interface RuntimeStatus { state: "created" | "running" | "stopped"; interaction: InteractionStatus | null }
 export interface AssistantHealth { state: HealthState; components: Record<string, ComponentHealth> }
-export interface AssistantCapabilities { activation: boolean; nativeRealtime: boolean; modular: boolean; state: boolean }
+export interface AssistantCapabilities { activation: boolean; nativeRealtime: boolean; state: boolean }
 export class AssistantRuntimeError extends Error {
   constructor(public readonly code: "RUNTIME_NOT_STARTED" | "CONFIGURATION_INVALID" | "MODE_UNAVAILABLE" | "INTERACTION_NOT_FOUND", message: string) { super(message); this.name = "AssistantRuntimeError"; }
 }

@@ -17,6 +17,7 @@ import {
   ModelRouter,
   PriceCatalog,
   ProductionModelGateway,
+  type ModelExecutor,
   type ModelPriceEntry,
 } from "intelligence-core";
 import { AllowlistPolicy, ToolRegistry, ToolRuntime } from "tool-system";
@@ -77,6 +78,8 @@ export interface DelegationComposition {
   broker: RuntimeDelegationBroker;
   delivery: DelegationDeliveryScheduler;
   intelligence: IntelligenceRuntime;
+  /** Shared metered text model boundary used by memory extraction as well as delegation. */
+  modelExecutor: ModelExecutor;
   /** The downstream catalogue given to the delegated model. Never reaches the voice model. */
   delegatedTools: ToolRuntime;
   usage: RuntimeUsageStore;
@@ -186,6 +189,7 @@ export function createDelegation(input: DelegationCompositionInput): DelegationC
     broker,
     delivery,
     intelligence,
+    modelExecutor: gateway,
     delegatedTools,
     usage,
     start: async () => {

@@ -29,9 +29,7 @@
     "intelligence-core": "file:../intelligence-core",
     "memory-core": "file:../memory-core",
     "realtime-core": "file:../speech-system/realtime core",
-    "scribe-core": "file:../speech-system/scribe core",
     "state-core": "file:../state-core",
-    "tool-system": "file:../tool-system",
-    "voice-core": "file:../speech-system/voice core"
+    "tool-system": "file:../tool-system"
   }
 }

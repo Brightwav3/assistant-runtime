@@ -11,7 +11,9 @@ const event = (value: RealtimeSpeechEvent): RealtimeSpeechEvent => value;
 
 test("maps input and cumulative output transcripts into one ordered episode", async () => {
   const directory = await mkdtemp(join(tmpdir(), "assistant-episode-"));
-  const episodes = new EpisodeRuntime({ store: new SqliteEpisodeStore({ path: join(directory, "memory.sqlite") }) });
+  const episodes = new EpisodeRuntime({
+    store: new SqliteEpisodeStore({ path: join(directory, "memory.sqlite") }),
+  });
   await episodes.start();
   try {
     const writer = new EpisodeMemoryWriter({ episodes, subjectId: "user-1", outputTranscriptMode: "cumulative" });
@@ -56,5 +58,30 @@ test("flush closes separate active sessions without merging their turns", async 
     await writer.flush();
     assert.deepEqual((await episodes.listTurns("session-a")).map(({ text }) => text), ["A"]);
     assert.deepEqual((await episodes.listTurns("session-b")).map(({ text }) => text), ["B"]);
+  } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+});
+
+test("heard meaning replaces the provider transcript in the episode", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "assistant-episode-heard-"));
+  const episodes = new EpisodeRuntime({
+    store: new SqliteEpisodeStore({ path: join(directory, "memory.sqlite") }),
+  });
+  await episodes.start();
+  try {
+    const writer = new EpisodeMemoryWriter({ episodes, subjectId: "user-1", preferHeardInput: true });
+    await writer.handle(event({ type: "transcript.final", sessionId: "session-1", text: "Y aquí es donde estamos y pronto", source: "input", timestampMs: 1 }));
+    await writer.handleHeard({
+      heardId: "heard-1",
+      sessionId: "session-1",
+      verbatim: "Pamatuju si, že jsme se bavili o robotech.",
+      meaning: "User remembers that they discussed robots.",
+      language: "cs",
+      uncertainParts: [],
+    });
+
+    const turns = await episodes.listTurns("session-1");
+    assert.deepEqual(turns.map(({ speaker, text, sourceEventId }) => ({ speaker, text, sourceEventId })), [
+      { speaker: "user", text: "User remembers that they discussed robots.", sourceEventId: "heard-1" },
+    ]);
   } finally { await episodes.stop(); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

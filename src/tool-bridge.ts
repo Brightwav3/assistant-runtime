@@ -154,9 +154,9 @@ export class ToolSystemRealtimeToolExecutor implements RealtimeToolExecutor {
     }));
   }
 
-  async execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }> {
+  async execute(input: { callId: string; tool: string; arguments: Record<string, unknown>; sessionId?: string; signal?: AbortSignal }): Promise<{ content: string; isError?: boolean }> {
     const report = await this.runtime.execute(
-      { tool: input.tool, args: toExecutionArguments(input.arguments), requestId: input.callId },
+      { tool: input.tool, args: toExecutionArguments(input.arguments), requestId: input.callId, ...(input.sessionId ? { sessionId: input.sessionId } : {}) },
       input.signal,
     );
     if (report.outcome.kind === "lifecycle") this.onLifecycle?.({ action: report.outcome.action, reason: report.outcome.reason, tool: input.tool });

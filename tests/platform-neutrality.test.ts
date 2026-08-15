@@ -24,7 +24,7 @@ test("the shipped runtime defaults name no operating system", async () => {
 });
 
 test("shared runtime source carries no Windows-only microphone identifier", async () => {
-  for (const file of ["src/config.ts", "src/realtime-audio.ts", "src/composition.ts", "src/modular.ts", "src/adapters.ts"]) {
+  for (const file of ["src/config.ts", "src/realtime-audio.ts", "src/composition.ts", "src/adapters.ts"]) {
     const source = await readFile(join(packageRoot, file), "utf8");
     assert.doesNotMatch(source, /windows-default-microphone/i, `${file} still names a Windows-only microphone`);
   }

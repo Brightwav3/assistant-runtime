@@ -2,7 +2,6 @@
 
 ```text
 Activation adapter -> AssistantRuntime -> Native realtime adapter
-                                 └----> Modular adapter (Scribe -> Intelligence -> Voice)
                                  └----> State adapter
 ```
 
@@ -78,23 +77,21 @@ there is no echo to trade the user's voice for.
 ```text
 createPlatformServices(process.platform) -> PlatformServices
                                             ├-> createActivationListener()  (ClapListener)
-                                            ├-> createSpeechStack()         (stt/tts/output)
                                             └-> player                      (PcmPlayerSpec)
 ```
 
 Shared composition never names a concrete platform implementation. It receives a
 leaf and reads `capability.status`; an `unsupported` host yields `degraded`
-microphone, playback, and modular components carrying a reason instead of a
-crash or a silent mode change.
+microphone and playback components carrying a reason instead of a crash or a
+silent mode change.
 
 Two rules follow from this and are enforced by tests in
 `tests/platform-neutrality.test.ts`:
 
 1. Shared identifiers are platform-neutral. The realtime capture stream is
    `local-default-microphone`, and the shipped activation `sourceId` default
-   matches it. Concrete device and provider names (`windows_speech_recognition`,
-   `ffplay.exe`) live only inside the leaf and reach diagnostics through the
-   leaf's own descriptors.
+   matches it. Concrete device names (`ffplay.exe`) live only inside the leaf
+   and reach diagnostics through the leaf's own descriptors.
 2. Shared realtime playback has no default player. `RealtimeCoreAdapter` takes an
    optional `PcmPlayerSpec`; when none is supplied it emits `playback.unavailable`
    and discards audio. It never falls back to the Windows executable.

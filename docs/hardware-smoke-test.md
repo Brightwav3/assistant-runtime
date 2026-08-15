@@ -134,8 +134,9 @@ test is to turn each one into a fact.
    same configuration worked. The cause is unexplained; the close code and
    reason are now recorded so a recurrence can be diagnosed instead of guessed.
 3. Summaries do not infer preferences or facts; they only summarise turns.
-4. The modular Scribe → Intelligence → Voice path has never run on hardware.
-   **Still open.** Every result above came from the native realtime path.
+4. The runtime is intentionally native-only: Gemini Live owns speech recognition,
+   reasoning, and response audio. The retired local Scribe → Intelligence → Voice
+   path is not part of this repository's production composition.
 
 ## Resetting between runs
 

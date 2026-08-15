@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { ComponentRegistry, EventBus } from "core-runtime";
-import type { Activation, ActivationSource, AssistantCapabilities, AssistantHealth, ComponentHealth, InteractionMode, InteractionStatus, ModularDriver, NativeRealtimeDriver, RuntimeComponent, RuntimeConfig, RuntimeStatus } from "./contracts.js";
+import type { Activation, ActivationSource, AssistantCapabilities, AssistantHealth, ComponentHealth, InteractionStatus, NativeRealtimeDriver, RuntimeComponent, RuntimeConfig, RuntimeStatus } from "./contracts.js";
 import { AssistantRuntimeError } from "./contracts.js";
 
-export interface RuntimeDependencies { components: RuntimeComponent[]; activation?: ActivationSource; nativeRealtime?: NativeRealtimeDriver; modular?: ModularDriver }
+export interface RuntimeDependencies { components: RuntimeComponent[]; activation?: ActivationSource; nativeRealtime?: NativeRealtimeDriver }
 
 /** Core Runtime owns component lifecycle, health and failure isolation; this runtime owns interactions. */
 function hosted(component: RuntimeComponent) {
@@ -43,8 +43,7 @@ export class AssistantRuntime {
     this.armInactivity(interaction.interactionId);
     try {
       interaction.state = "active";
-      if (this.config.mode === "native_realtime") await this.runNative(interaction);
-      else await this.runModular(interaction);
+      await this.runNative(interaction);
       return interaction;
     } catch (error) {
       if (this.current?.interactionId === interaction.interactionId) {
@@ -66,17 +65,13 @@ export class AssistantRuntime {
     const components = Object.fromEntries(entries) as Record<string, ComponentHealth>; const values = Object.values(components);
     return { state: values.some((health) => health.state === "unhealthy") ? "unhealthy" : values.some((health) => health.state === "degraded") ? "degraded" : "healthy", components };
   }
-  capabilities(): AssistantCapabilities { return { activation: Boolean(this.dependencies.activation), nativeRealtime: Boolean(this.dependencies.nativeRealtime), modular: Boolean(this.dependencies.modular), state: Boolean(this.config.state) }; }
+  capabilities(): AssistantCapabilities { return { activation: Boolean(this.dependencies.activation), nativeRealtime: Boolean(this.dependencies.nativeRealtime), state: Boolean(this.config.state) }; }
   componentCapabilities(): Promise<Record<string, Record<string, unknown>>> { return this.registry.capabilities(); }
   private async runNative(interaction: InteractionStatus): Promise<void> {
     const driver = this.dependencies.nativeRealtime; if (!driver) throw new AssistantRuntimeError("MODE_UNAVAILABLE", "Native realtime driver is not configured.");
     const session = await driver.open({ interactionId: interaction.interactionId, signal: this.abort!.signal, onActivity: () => this.armInactivity(interaction.interactionId) });
     this.closeSession = session.close;
     void session.done.finally(() => { if (this.current?.interactionId === interaction.interactionId) void this.finish(interaction); });
-  }
-  private async runModular(interaction: InteractionStatus): Promise<void> {
-    const driver = this.dependencies.modular; if (!driver) throw new AssistantRuntimeError("MODE_UNAVAILABLE", "Modular driver is not configured.");
-    void driver.run({ interactionId: interaction.interactionId, signal: this.abort!.signal, onActivity: () => this.armInactivity(interaction.interactionId) }).then(() => { if (this.current?.interactionId === interaction.interactionId) return this.finish(interaction); }).catch(() => { if (this.current?.interactionId === interaction.interactionId) { interaction.state = "failed"; return this.finish(interaction); } });
   }
   private async finish(interaction: InteractionStatus): Promise<void> {
     if (this.current?.interactionId !== interaction.interactionId) return;

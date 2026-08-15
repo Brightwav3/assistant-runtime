@@ -1,5 +1,4 @@
 import type { ClapListener, ClapListenerOptions, DoubleClapProvider } from "activation-core";
-import type { AudioOutput, SttProvider, TtsProvider } from "scribe-core";
 
 /** Every platform the factory can be asked about. `process.platform` values outside this set resolve to `unknown`. */
 export type PlatformId = "win32" | "darwin" | "linux" | "unknown";
@@ -24,15 +23,6 @@ export interface PcmPlayerSpec {
   args(sampleRate: number): string[];
 }
 
-/** The local speech stack used by modular mode. */
-export interface PlatformSpeechStack {
-  stt: SttProvider;
-  tts: TtsProvider;
-  output: AudioOutput;
-  /** Stable identifiers reported through component capabilities. */
-  descriptor: { stt: string; tts: string };
-}
-
 /**
  * The complete platform boundary. Shared composition depends on this interface
  * and never imports a concrete `Windows*`/`Darwin*`/`Linux*` implementation.
@@ -44,8 +34,6 @@ export interface PlatformServices {
   readonly player: PcmPlayerSpec;
   /** Throws `PlatformUnsupportedError` when `capability.status === "unsupported"`. */
   createActivationListener(provider: DoubleClapProvider, options: ClapListenerOptions): ClapListener;
-  /** Throws `PlatformUnsupportedError` when `capability.status === "unsupported"`. */
-  createSpeechStack(): PlatformSpeechStack;
 }
 
 export class PlatformUnsupportedError extends Error {

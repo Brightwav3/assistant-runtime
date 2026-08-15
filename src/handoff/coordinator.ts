@@ -20,6 +20,7 @@ import {
   type HandoffReason,
   type HandoffSessionController,
 } from "./contracts.js";
+import { waitForIdle, type HandoffIdleGate } from "./idle-gate.js";
 
 export interface HandoffCoordinatorOptions {
   logicalSessionId: string;
@@ -29,6 +30,10 @@ export interface HandoffCoordinatorOptions {
   emit?: (event: HandoffEvent) => void;
   /** A replacement that has not acknowledged its context by now is abandoned, not committed. */
   readyTimeoutMs?: number;
+  /** Reports when the conversation has a gap. Without one, `commitWhenIdle` commits immediately. */
+  idle?: HandoffIdleGate;
+  /** How long to wait for that gap before giving up on the attempt. */
+  idleWaitTimeoutMs?: number;
   clock?: () => string;
   now?: () => number;
 }
@@ -47,6 +52,7 @@ export class HandoffCoordinator {
   private readonly clock: () => string;
   private readonly now: () => number;
   private readonly readyTimeoutMs: number;
+  private readonly idleWaitTimeoutMs: number;
   private phaseValue: HandoffPhase = "idle";
   private logicalSessionId: string;
   private activePhysicalSessionId: string;
@@ -58,6 +64,7 @@ export class HandoffCoordinator {
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.now = options.now ?? (() => Date.now());
     this.readyTimeoutMs = options.readyTimeoutMs ?? 20_000;
+    this.idleWaitTimeoutMs = options.idleWaitTimeoutMs ?? 30_000;
     this.logicalSessionId = options.logicalSessionId;
     this.activePhysicalSessionId = options.activePhysicalSessionId;
   }
@@ -114,6 +121,35 @@ export class HandoffCoordinator {
 
     this.phaseValue = "ready";
     this.emit({ type: "handoff.ready", identity: this.identity(), reason, occurredAt: this.clock() });
+  }
+
+  /**
+   * Waits for a gap in the conversation, then commits.
+   *
+   * The gap is re-checked immediately before the swap. A user who starts speaking between
+   * "idle observed" and "commit executed" would otherwise be cut over mid-utterance —
+   * the window is small, and it is exactly the window a real interruption lands in.
+   */
+  public async commitWhenIdle(): Promise<void> {
+    const attempt = this.attempt;
+    if (!attempt) throw new HandoffError("HANDOFF_NOT_STARTED", "No handoff attempt has been prepared.");
+    if (attempt.terminal) return;
+    if (this.phaseValue !== "ready") throw new HandoffError("HANDOFF_NOT_READY", "The replacement session has not acknowledged its context.");
+
+    const gate = this.options.idle;
+    if (!gate) return this.commit();
+
+    const deadline = this.now() + this.idleWaitTimeoutMs;
+    while (this.now() < deadline) {
+      const remaining = deadline - this.now();
+      if (!(await waitForIdle(gate, remaining))) break;
+      if (attempt.terminal) return;
+      // Re-checked, not assumed: `waitForIdle` resolving means a gap existed, not that one
+      // still does by the time this line runs.
+      if (gate.isIdle()) return this.commit();
+    }
+
+    await this.abort("NO_IDLE_GAP");
   }
 
   /**

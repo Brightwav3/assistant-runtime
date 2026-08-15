@@ -38,6 +38,7 @@ export class DelegationDeliveryScheduler {
   private readonly speaking = new Set<string>();
   private readonly queues = new Map<string, PendingDelivery[]>();
   private readonly closed = new Set<string>();
+  private readonly idleListeners = new Map<string, Set<() => void>>();
   private readonly clock: () => string;
   private readonly maxQueueLength: number;
 
@@ -63,6 +64,28 @@ export class DelegationDeliveryScheduler {
   public async markOutputFinished(sessionId: string): Promise<void> {
     this.speaking.delete(sessionId);
     await this.drain(sessionId);
+    this.notifyIdle(sessionId);
+  }
+
+  /**
+   * Whether the assistant is currently between outputs on this session.
+   *
+   * Exposed rather than reimplemented elsewhere: `when_idle` delivery and a handoff
+   * cutover are asking the same question, and two answers to it would drift apart the
+   * first time one of them learned about a new kind of output.
+   */
+  public isIdle(sessionId: string): boolean { return !this.speaking.has(sessionId); }
+
+  /** Called each time this session finishes an output. Returns an unsubscribe function. */
+  public onIdle(sessionId: string, listener: () => void): () => void {
+    const listeners = this.idleListeners.get(sessionId) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.idleListeners.set(sessionId, listeners);
+    return () => listeners.delete(listener);
+  }
+
+  private notifyIdle(sessionId: string): void {
+    for (const listener of [...(this.idleListeners.get(sessionId) ?? [])]) listener();
   }
 
   public async closeSession(sessionId: string): Promise<void> {

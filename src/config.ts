@@ -15,11 +15,34 @@ export interface RuntimeSettings {
   echoCancellation: EchoCancellationSettings;
   delegation: DelegationSettings;
   usage: UsageSettings;
+  handoff: HandoffSettings;
+}
+
+/**
+ * Session handoff. The threshold sits far enough below the limit to absorb prefill
+ * latency, which is measured in seconds — preparing at the limit is preparing too late.
+ */
+export interface HandoffSettings {
+  enabled: boolean;
+  /**
+   * The provider's session context limit, configured rather than discovered. Realtime
+   * providers do not reliably announce it, and a wrong number here is visible in the
+   * trigger's behaviour rather than hidden inside a provider response.
+   */
+  contextLimitTokens: number;
+  /** Fraction of the limit at which a replacement starts being prepared. */
+  prepareThreshold: number;
+  /** A replacement that has not acknowledged its context by now is abandoned. */
+  readyTimeoutMs: number;
+  /** How long the runtime waits for a conversational gap before giving up on the attempt. */
+  idleWaitTimeoutMs: number;
 }
 
 export interface DebugSettings {
   heard: boolean;
   path: string;
+  trace: boolean;
+  traceDir: string;
 }
 
 /**
@@ -158,7 +181,7 @@ const defaults: RuntimeSettings = {
   realtime: { provider: "gemini", model: "gemini-3.1-flash-live-preview", voice: "Charon", inputSampleRate: 16_000, outputSampleRate: 24_000 },
   memory: { enabled: true, path: "..\\.runtime\\memory.sqlite", scopeSubjectId: "primary-user", retrievalLimit: 8, retrievalTokenBudget: 1200, episodeRetentionDays: 30 },
   state: { enabled: true },
-  debug: { heard: false, path: "..\\.runtime\\heard.jsonl" },
+  debug: { heard: false, path: "..\\.runtime\\heard.jsonl", trace: false, traceDir: "..\\.runtime\\traces" },
   echoCancellation: { enabled: true, processor: "cancel_or_suppress", tailMs: 400, maxDelayMs: 1_000, suppressionGain: 0, bargeInMargin: 2, bargeInHoldMs: 800, minErleDb: 6, recoveryFrames: 25 },
   delegation: {
     enabled: false,
@@ -183,6 +206,17 @@ const defaults: RuntimeSettings = {
     lateResultPolicy: "queue",
   },
   usage: { enabled: true, path: "..\\.runtime\\usage.jsonl", maxRecords: 10_000, unknownCostPolicy: "block", priceCatalogVersion: "unset" },
+  handoff: {
+    enabled: false,
+    contextLimitTokens: 128_000,
+    // 0.70 leaves roughly 38k tokens of headroom against this limit — about twenty minutes
+    // of speech at the estimator's audio rate, against a prefill measured in seconds.
+    // `tests/handoff-trigger.test.ts` asserts that margin numerically, so lowering it here
+    // fails a test rather than quietly shrinking the safety window.
+    prepareThreshold: 0.7,
+    readyTimeoutMs: 20_000,
+    idleWaitTimeoutMs: 30_000,
+  },
 };
 
 function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings {
@@ -193,16 +227,23 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
     realtime: { ...defaults.realtime, ...(raw.realtime ?? {}) },
     memory: { ...defaults.memory, ...(raw.memory ?? {}) },
     state: { ...defaults.state, ...(raw.state ?? {}) },
-    debug: { heard: raw.debug?.heard ?? defaults.debug!.heard, path: raw.debug?.path ?? defaults.debug!.path },
+    debug: {
+      heard: raw.debug?.heard ?? defaults.debug!.heard,
+      path: raw.debug?.path ?? defaults.debug!.path,
+      trace: raw.debug?.trace ?? defaults.debug!.trace,
+      traceDir: raw.debug?.traceDir ?? defaults.debug!.traceDir,
+    },
     echoCancellation: { ...defaults.echoCancellation, ...(raw.echoCancellation ?? {}) },
     delegation: { ...defaults.delegation, ...(raw.delegation ?? {}) },
     usage: { ...defaults.usage, ...(raw.usage ?? {}) },
+    handoff: { ...defaults.handoff, ...(raw.handoff ?? {}) },
   };
   if (!settings.assistantId || !Number.isFinite(settings.inactivityMs) || settings.inactivityMs < 1) throw new Error("assistantId and a positive inactivityMs are required.");
   if (settings.mode !== "native_realtime") throw new Error("mode must be native_realtime.");
   if (settings.memory.enabled && !settings.memory.path) throw new Error("memory.path is required when memory is enabled.");
   if (settings.memory.enabled && !isAbsolute(settings.memory.path)) settings.memory.path = resolve(basePath, settings.memory.path);
   if (settings.debug && !isAbsolute(settings.debug.path)) settings.debug.path = resolve(basePath, settings.debug.path);
+  if (settings.debug && !isAbsolute(settings.debug.traceDir)) settings.debug.traceDir = resolve(basePath, settings.debug.traceDir);
   const echo = settings.echoCancellation;
   if (echo.processor !== "adaptive" && echo.processor !== "gate" && echo.processor !== "cancel_or_suppress") throw new Error("echoCancellation.processor must be adaptive, gate, or cancel_or_suppress.");
   if (!Number.isFinite(echo.tailMs) || echo.tailMs < 0) throw new Error("echoCancellation.tailMs must be zero or more.");
@@ -233,6 +274,14 @@ function merge(raw: Partial<RuntimeSettings>, basePath: string): RuntimeSettings
   if (usage.maximumCost !== undefined && (!Number.isFinite(usage.maximumCost) || usage.maximumCost < 0)) throw new Error("usage.maximumCost must be zero or more.");
   if (usage.enabled && !usage.path) throw new Error("usage.path is required when usage metering is enabled.");
   if (usage.enabled && !isAbsolute(usage.path)) usage.path = resolve(basePath, usage.path);
+
+  const handoff = settings.handoff;
+  if (!Number.isFinite(handoff.contextLimitTokens) || handoff.contextLimitTokens <= 0) throw new Error("handoff.contextLimitTokens must be greater than zero.");
+  // A threshold at or above 1 prepares at the limit, which is preparing too late; at or
+  // below 0 it prepares immediately and never stops.
+  if (!(handoff.prepareThreshold > 0 && handoff.prepareThreshold < 1)) throw new Error("handoff.prepareThreshold must be within (0, 1).");
+  if (!Number.isFinite(handoff.readyTimeoutMs) || handoff.readyTimeoutMs <= 0) throw new Error("handoff.readyTimeoutMs must be greater than zero.");
+  if (!Number.isFinite(handoff.idleWaitTimeoutMs) || handoff.idleWaitTimeoutMs <= 0) throw new Error("handoff.idleWaitTimeoutMs must be greater than zero.");
 
   return settings;
 }

@@ -8,6 +8,10 @@
  * The translation is deliberately thin. Every guarantee — validation, policy,
  * guards, brokered execution — stays inside Tool System. Nothing here decides
  * whether an execution may happen; it only carries the question across.
+ *
+ * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
+ *   A retry, default, or argument fix added here is a guarantee that exists for
+ *   callers who route through this file and not for callers who do not.
  */
 
 import type { PolicyClient, PolicyDecision, ToolClient, ToolDescriptor, ToolRequest, ToolResult } from "intelligence-core";
@@ -114,7 +118,7 @@ function toRealtimeMetadata(declaration: ToolDeclaration): RealtimeToolDeclarati
 }
 
 export class ToolSystemToolClient implements ToolClient {
-  constructor(private readonly runtime: ToolRuntime) {}
+  constructor(private readonly runtime: ToolRuntime, private readonly onLifecycle?: (request: LifecycleRequest) => void) {}
 
   async discover(): Promise<ToolDescriptor[]> {
     return this.runtime.discover().map((declaration) => ({
@@ -129,6 +133,7 @@ export class ToolSystemToolClient implements ToolClient {
       { tool: request.tool_id, args: toExecutionArguments(request.arguments), requestId: request.id },
       signal,
     );
+    if (report.outcome.kind === "lifecycle") this.onLifecycle?.({ action: report.outcome.action, reason: report.outcome.reason, tool: request.tool_id });
 
     return { tool_call_id: request.id, content: describeToolOutcome(report.outcome) };
   }

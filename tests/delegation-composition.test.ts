@@ -33,7 +33,7 @@ test("enabling delegation swaps the voice catalogue instead of widening it", asy
     const voice = composition.tools!.discover().map((declaration) => declaration.name).sort();
     // The voice model gains delegation and loses the lookup tools it would otherwise use
     // to answer inline — which is the whole point, not a side effect.
-    assert.deepEqual(voice, ["end_conversation", "intelligence_delegate"]);
+    assert.deepEqual(voice, ["intelligence_delegate"]);
     assert.equal(voice.includes("memory_search"), false);
     assert.equal(voice.includes("get_time"), false);
 
@@ -41,7 +41,14 @@ test("enabling delegation swaps the voice catalogue instead of widening it", asy
     assert.ok(component, "delegation runs as a lifecycle component");
     const capabilities = await component!.capabilities!() as { model: string; delegatedTools: string[] };
     assert.equal(capabilities.model, "gemini-2.5-flash");
-    assert.deepEqual([...capabilities.delegatedTools].sort(), ["memory_search", "memory_view"]);
+    // `conversation_recall` reads the turns of the conversation in progress. Extraction has
+    // not run over them yet, so without it the delegated model cannot answer a question
+    // about what was just said — least of all after a handoff, when the live session holds
+    // a summary rather than the words.
+    // The host catalogue lives here too, and only here. With delegation on it used to be
+    // installed into neither Tool System — the tools existed and were unreachable, which on
+    // hardware looked like a speech failure rather than a missing capability.
+    assert.deepEqual([...capabilities.delegatedTools].sort(), ["calculate", "conversation_recall", "end_conversation", "get_time", "memory_create", "memory_search", "memory_view", "system_status", "uptime"]);
     assert.equal(capabilities.delegatedTools.includes("intelligence_delegate"), false);
   } finally {
     await composition.runtime.stop();

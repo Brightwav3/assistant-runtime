@@ -1,6 +1,14 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
 import { REALTIME_INPUT_FORMAT, RealtimeCore, type AudioFrame, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
 import { spawn } from "node:child_process";
+/**
+ * Adapters presenting other cores to this runtime.
+ *
+ * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
+ *   No core imports another core. Translation happens here, thinly.
+ */
+
+import { randomUUID } from "node:crypto";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RealtimeToolExecutor, RuntimeComponent } from "./contracts.js";
 import type { PcmPlayerSpec } from "./platform/contracts.js";
 import { PcmInputFrameizer, REALTIME_MICROPHONE_STREAM_ID } from "./realtime-audio.js";
@@ -90,6 +98,18 @@ export async function verifyPlayback(player: PcmPlayerSpec | undefined, sampleRa
   });
 }
 
+/**
+ * Why a session took ownership of audio. A fresh interaction starts a new logical session;
+ * a handoff continues the one already running, which is the whole point of the distinction.
+ */
+export type RealtimeSessionKind = "interaction" | "handoff";
+
+export type RealtimeSessionListener = (
+  session: RealtimeSpeechSession,
+  capabilities: { providers: Array<{ contextInjection: boolean }> },
+  kind: RealtimeSessionKind,
+) => void;
+
 /** Adapts Realtime Core sessions to the runtime's provider-neutral native driver. */
 export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private active?: RealtimeSpeechSession;
@@ -107,7 +127,9 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private toolCompleted = 0;
   private toolFailed = 0;
   private toolCancelled = 0;
-  private readonly sessionListeners = new Set<(session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void>();
+  private readonly sessionListeners = new Set<RealtimeSessionListener>();
+  /** Every open session and its event pump, keyed by physical id. More than one during a handoff. */
+  private readonly attachments = new Map<string, { session: RealtimeSpeechSession; close: () => Promise<void>; done: Promise<void> }>();
 
   /**
    * Reports that something the inactivity timer cannot see is still happening — a
@@ -115,8 +137,8 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
    */
   signalActivity(): void { this.onActivity?.(); }
 
-  /** Notifies a consumer each time a provider session opens, with the provider's capabilities. */
-  onSession(listener: (session: RealtimeSpeechSession, capabilities: { providers: Array<{ contextInjection: boolean }> }) => void): () => void {
+  /** Notifies a consumer each time a session takes ownership of audio, with the provider's capabilities. */
+  onSession(listener: RealtimeSessionListener): () => void {
     this.sessionListeners.add(listener);
     return () => this.sessionListeners.delete(listener);
   }
@@ -154,6 +176,10 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.clearCaptureIdleFlush();
     if (this.active) this.onInputSessionEnded?.(this.active.id);
     await this.echo?.close();
+    // Every open session, not only the active one: a handoff in flight leaves a replacement
+    // that nothing else would ever close.
+    for (const attachment of [...this.attachments.values()]) await attachment.close().catch(() => undefined);
+    this.attachments.clear();
     await this.active?.close();
     this.active = undefined;
     this.opening = false;
@@ -173,12 +199,11 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     const message = (error: unknown) => this.redact(error instanceof Error ? error.message : String(error));
     let config: RealtimeSessionConfig;
     try {
-      config = typeof this.config === "function" ? await this.config() : this.config;
-      if (this.toolExecutor) {
-        const tools = await this.toolExecutor.discover();
-        config = { ...config, tools };
-        this.trace({ type: "realtime.tools.discovered", timestampMs: Date.now(), count: tools.length, tools: tools.map((tool) => tool.name) });
-      }
+      // Awaited only when there is something to await. A bare `await` on an already-built
+      // config would defer `connect` by a microtask, and capture arriving in that window
+      // would find neither an open session nor one being opened.
+      const built = this.buildConfig();
+      config = built instanceof Promise ? await built : built;
     } catch (error) {
       this.opening = false;
       this.pendingFrames = [];
@@ -204,15 +229,136 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.active = session;
     this.opening = false;
     this.trace({ type: "realtime.connect.succeeded", timestampMs: Date.now(), sessionId: session.id });
-    // Announced as a subscription rather than another constructor argument: a consumer
-    // that needs the live session (delegated result delivery) should not have to be
-    // threaded through every caller that only wants audio.
-    for (const listener of [...this.sessionListeners]) {
-      try { listener(session, await this.core.capabilities()); } catch (error) { this.trace({ type: "realtime.session.listener.failed", message: message(error) }); }
-    }
+    await this.notifySessionListeners(session, "interaction");
     await this.enqueueFrames(session, this.pendingFrames.splice(0));
 
     this.echo?.beginSession(session.id);
+    const attachment = this.attach(session, input.signal);
+
+    // The Live API waits for input before it speaks, so the opening line is prompted, not spontaneous.
+    const greeting = "Pozdrav uživatele přesně touto větou a nic k ní nepřidávej: „Dobrý den, jsem MARK, jak vám mohu pomoci pane?“";
+    try {
+      await session.sendText(greeting);
+      this.trace({ type: "realtime.greeting.sent", timestampMs: Date.now() });
+    } catch (error) {
+      this.trace({ type: "realtime.greeting.failed", timestampMs: Date.now(), message: message(error) });
+      throw error;
+    }
+
+    return attachment;
+  }
+
+  /**
+   * Opens a session that owns neither microphone nor playback, and is never greeted.
+   *
+   * A replacement that greeted would announce the handoff in the one way the user cannot
+   * miss. It listens on its own event stream from the moment it exists, so nothing it says
+   * after activation is lost to a pump that started late.
+   */
+  async openReplacement(): Promise<string> {
+    const config = await this.buildConfig();
+    const handle = await this.core.open(config);
+    this.trace({ type: "realtime.replacement.opened", timestampMs: Date.now(), sessionId: handle.id });
+    this.attach(handle.session);
+    return handle.id;
+  }
+
+  /**
+   * Delivers context to a session that is not active yet, and resolves only once the
+   * provider has taken it. Injection is used when advertised; `sendText` is the announced
+   * fallback rather than a silent equivalence.
+   */
+  async prefillSession(sessionId: string, context: string): Promise<void> {
+    const attachment = this.attachments.get(sessionId);
+    if (!attachment) throw new Error(`Unknown realtime session '${sessionId}'`);
+    const capabilities = await this.core.capabilities();
+    const injectable = capabilities.providers[0]?.contextInjection === true && typeof attachment.session.sendContextEvent === "function";
+    if (!injectable) {
+      this.trace({ type: "realtime.prefill.degraded", timestampMs: Date.now(), sessionId, reason: "CONTEXT_INJECTION_UNAVAILABLE" });
+      await attachment.session.sendText(context);
+    } else {
+      await attachment.session.sendContextEvent!({
+        eventId: `ctx_${randomUUID()}`,
+        sessionId,
+        source: "system",
+        type: "system.event",
+        status: "completed",
+        delivery: "silent",
+        content: { type: "text", text: context },
+        timestampMs: Date.now(),
+      });
+    }
+    this.trace({ type: "realtime.prefill.acknowledged", timestampMs: Date.now(), sessionId, native: injectable });
+  }
+
+  /**
+   * Hands microphone and playback to an already-prefilled session.
+   *
+   * Synchronous by contract. An `await` between giving up one session and taking up the
+   * next is a window in which zero sessions own audio, which is the same defect as two
+   * owning it, only quieter. Echo cancellation is deliberately *not* rebound here — the
+   * handoff's echo rebinder owns that, so there is exactly one place that does it.
+   */
+  activateSession(sessionId: string): void {
+    const attachment = this.attachments.get(sessionId);
+    if (!attachment) throw new Error(`Unknown realtime session '${sessionId}'`);
+    this.core.activate(sessionId);
+    this.clearCaptureIdleFlush();
+    this.active = attachment.session;
+    this.opening = false;
+    this.pendingFrames = [];
+    this.frameizer.reset();
+    this.inputFrameTimestampMs = Date.now();
+    this.inputSendChain = Promise.resolve();
+    this.trace({ type: "realtime.session.activated", timestampMs: Date.now(), sessionId });
+    void this.notifySessionListeners(attachment.session, "handoff");
+  }
+
+  /** Closes one session by id, leaving any other open session untouched. */
+  async closeSession(sessionId: string): Promise<void> {
+    const attachment = this.attachments.get(sessionId);
+    if (!attachment) return;
+    this.attachments.delete(sessionId);
+    await attachment.close();
+  }
+
+  /** The session that currently owns audio, or undefined between interactions. */
+  activeSessionId(): string | undefined { return this.active?.id; }
+
+  /** Synchronous when nothing needs resolving, so callers can keep `connect` in the same tick. */
+  private buildConfig(): RealtimeSessionConfig | Promise<RealtimeSessionConfig> {
+    const base = typeof this.config === "function" ? this.config() : this.config;
+    if (!this.toolExecutor && !(base instanceof Promise)) return base;
+    return this.withTools(base);
+  }
+
+  private async withTools(base: RealtimeSessionConfig | Promise<RealtimeSessionConfig>): Promise<RealtimeSessionConfig> {
+    const config = await base;
+    if (!this.toolExecutor) return config;
+    const tools = await this.toolExecutor.discover();
+    this.trace({ type: "realtime.tools.discovered", timestampMs: Date.now(), count: tools.length, tools: tools.map((tool) => tool.name) });
+    return { ...config, tools };
+  }
+
+  /**
+   * Announced as a subscription rather than another constructor argument: a consumer that
+   * needs the live session (delegated result delivery) should not have to be threaded
+   * through every caller that only wants audio. `kind` distinguishes a fresh interaction
+   * from a handoff, because only the former starts a new logical session.
+   */
+  private async notifySessionListeners(session: RealtimeSpeechSession, kind: RealtimeSessionKind): Promise<void> {
+    const capabilities = await this.core.capabilities().catch(() => ({ providers: [] as Array<{ contextInjection: boolean }> }));
+    for (const listener of [...this.sessionListeners]) {
+      try { listener(session, capabilities, kind); } catch (error) { this.trace({ type: "realtime.session.listener.failed", message: this.redact(error instanceof Error ? error.message : String(error)) }); }
+    }
+  }
+
+  /**
+   * Runs one session's event pump. Every open session has one, active or not: a replacement
+   * that only started reading its stream at activation would have already missed whatever
+   * the provider said about the context it was prefilled with.
+   */
+  private attach(session: RealtimeSpeechSession, signal?: AbortSignal): { close(): Promise<void>; done: Promise<void> } {
     // `output.audio_completed` deliberately does not stop the reference schedule: the last
     // chunk has been handed to the player, not yet heard. The suppression tail covers it.
     const playback = new PcmPlaybackController(() => spawnPcmPlayback(24_000, this.trace, this.player), this.echo);
@@ -224,7 +370,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     let abortRequested = 0;
     let abortCompleted = 0;
 
-    const emitPlaybackMetrics = (timestampMs: number) => this.trace({ type: "realtime.playback.metrics", timestampMs, firstChunkAt: firstChunkAt ?? null, bytesWritten, chunksWritten: chunks, abortRequested, abortCompleted, durationMs: playbackDurationMs ?? null });
+    const emitPlaybackMetrics = (timestampMs: number) => this.trace({ type: "realtime.playback.metrics", timestampMs, sessionId: session.id, firstChunkAt: firstChunkAt ?? null, bytesWritten, chunksWritten: chunks, abortRequested, abortCompleted, durationMs: playbackDurationMs ?? null });
 
     const done = (async () => {
       for await (const event of session.events()) {
@@ -253,45 +399,48 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
           playbackDurationMs = playbackStartedAt === undefined ? undefined : Math.max(0, event.timestampMs - playbackStartedAt);
           emitPlaybackMetrics(event.timestampMs);
         }
-        if (event.type === "tool.requested") await this.handleToolRequest(session, event, input.signal);
+        if (event.type === "tool.requested") await this.handleToolRequest(session, event, signal);
         if (event.type === "session.closed" || event.type === "session.error") {
+          this.attachments.delete(session.id);
           this.onInputSessionEnded?.(session.id);
-          if (this.active === session) this.active = undefined;
-          this.clearCaptureIdleFlush();
-          this.onActivity = undefined;
+          // Only the session that owned audio may tear down the shared capture state. A
+          // replacement failing must not silence the session still talking to the user.
+          if (this.active === session) {
+            this.active = undefined;
+            this.clearCaptureIdleFlush();
+            this.onActivity = undefined;
+          }
           playback.close();
           emitPlaybackMetrics(event.timestampMs);
-          this.trace({ type: "realtime.stream.ended", timestampMs: event.timestampMs, chunks });
+          this.trace({ type: "realtime.stream.ended", timestampMs: event.timestampMs, sessionId: session.id, chunks });
           return;
         }
       }
-      this.trace({ type: "realtime.stream.ended", timestampMs: Date.now(), chunks });
+      this.attachments.delete(session.id);
+      this.trace({ type: "realtime.stream.ended", timestampMs: Date.now(), sessionId: session.id, chunks });
     })();
 
-    // The Live API waits for input before it speaks, so the opening line is prompted, not spontaneous.
-    const greeting = "Pozdrav uživatele přesně touto větou a nic k ní nepřidávej: „Dobrý den, jsem MARK, jak vám mohu pomoci pane?“";
-    try {
-      await session.sendText(greeting);
-      this.trace({ type: "realtime.greeting.sent", timestampMs: Date.now() });
-    } catch (error) {
-      this.trace({ type: "realtime.greeting.failed", timestampMs: Date.now(), message: message(error) });
-      throw error;
-    }
-
-    return {
+    const attachment = {
       close: async () => {
+        this.attachments.delete(session.id);
         playback.close();
-        this.clearCaptureIdleFlush();
-        if (this.active === session) this.active = undefined;
-        this.opening = false;
-        this.pendingFrames = [];
-        this.frameizer.reset();
-        this.onActivity = undefined;
+        if (this.active === session) {
+          this.clearCaptureIdleFlush();
+          this.active = undefined;
+          this.opening = false;
+          this.pendingFrames = [];
+          this.frameizer.reset();
+          this.onActivity = undefined;
+        }
         this.onInputSessionEnded?.(session.id);
-        await session.close();
+        // Realtime Core is asked first so it also forgets the session; closing the session
+        // directly is the fallback, because what must happen here is that the transport ends.
+        try { await this.core.close(session.id); } catch { await session.close().catch(() => undefined); }
       },
       done,
     };
+    this.attachments.set(session.id, { session, close: attachment.close, done });
+    return attachment;
   }
 
   async sendMicrophonePcm(data: Int16Array): Promise<void> {

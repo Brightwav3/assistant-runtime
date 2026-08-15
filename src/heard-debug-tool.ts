@@ -1,6 +1,7 @@
 import { appendFile, mkdir, open } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
 import type { ExecutionOutcome, ToolDeclaration, ToolHandler } from "tool-system";
+import type { EpisodeUncertainPart, UncertaintyLevel } from "memory-core";
 
 export const RECORD_HEARD_TOOL = "record_heard";
 
@@ -17,7 +18,7 @@ export interface HeardRecord {
   verbatim: string;
   meaning: string;
   language: string;
-  uncertain_parts: string[];
+  uncertain_parts: EpisodeUncertainPart[];
 }
 
 function timestampPart(now: Date): string {
@@ -56,7 +57,7 @@ export function recordHeardDeclaration(): ToolDeclaration {
       verbatim: { type: "string", description: "Best-effort literal reconstruction of the user's words. Do not paraphrase.", maxLength: 2_000 },
       meaning: { type: "string", description: "Best-effort Czech meaning of what the user intended.", maxLength: 2_000 },
       language: { type: "string", description: "The language the user appears to be speaking.", maxLength: 32 },
-      uncertain_parts: { type: "string", description: "Comma-separated words or fragments that may be uncertain. Empty if none.", maxLength: 500 },
+      uncertain_parts: { type: "string", description: "JSON array: [{\"text\":\"fragment\",\"uncertainty\":\"low|medium|high\",\"alternatives\":[\"alternative\"]}]. Use [] if none.", maxLength: 1_000 },
     },
     required: ["verbatim", "meaning", "language"],
     sideEffect: "filesystem_write",
@@ -68,8 +69,34 @@ function text(args: Record<string, unknown>, name: string): string {
   return typeof args[name] === "string" ? args[name].trim() : "";
 }
 
+const INTERNAL_DELEGATION_RESULT = /\[\s*DELEGATION\s+RESULT\b/i;
+const confidenceByLevel: Record<UncertaintyLevel, number> = { low: 0.75, medium: 0.5, high: 0.25 };
+
+export function parseUncertainParts(raw: string): EpisodeUncertainPart[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed.flatMap((entry) => {
+      if (typeof entry !== "object" || entry === null) return [];
+      const value = entry as Record<string, unknown>;
+      const part = typeof value.text === "string" ? value.text.trim() : "";
+      const level = value.uncertainty;
+      if (!part || (level !== "low" && level !== "medium" && level !== "high")) return [];
+      const uncertainty: UncertaintyLevel = level;
+      const alternatives = Array.isArray(value.alternatives) ? value.alternatives.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 5) : [];
+      return [{ text: part, uncertainty, confidence: confidenceByLevel[uncertainty], ...(alternatives.length ? { alternatives } : {}) }];
+    }).slice(0, 20);
+  } catch { /* legacy comma-separated input below */ }
+  return raw.split(",").map((part) => part.trim()).filter(Boolean).slice(0, 20).map((part) => ({ text: part, uncertainty: "medium" as const, confidence: 0.5 }));
+}
+
 export function recordHeardHandler(options: RecordHeardOptions): ToolHandler {
   return async (args, context): Promise<ExecutionOutcome> => {
+    const verbatim = text(args, "verbatim");
+    const meaning = text(args, "meaning");
+    if (INTERNAL_DELEGATION_RESULT.test(verbatim) || INTERNAL_DELEGATION_RESULT.test(meaning)) {
+      return { kind: "error", error: { code: "invalid_arguments", message: "Internal delegation results are not user speech.", retryable: false } };
+    }
     // Keep the runtime source-compatible with an older Tool System checkout while
     // the optional session correlation field rolls out across sibling repositories.
     const sessionId = (context as typeof context & { readonly sessionId?: string }).sessionId;
@@ -78,10 +105,10 @@ export function recordHeardHandler(options: RecordHeardOptions): ToolHandler {
       heard_id: context.requestId,
       ...(sessionId ? { session_id: sessionId } : {}),
       occurred_at: new Date().toISOString(),
-      verbatim: text(args, "verbatim"),
-      meaning: text(args, "meaning"),
+      verbatim,
+      meaning,
       language: text(args, "language"),
-      uncertain_parts: text(args, "uncertain_parts").split(",").map((part) => part.trim()).filter(Boolean),
+      uncertain_parts: parseUncertainParts(text(args, "uncertain_parts")),
     };
     await mkdir(dirname(options.path), { recursive: true });
     await appendFile(options.path, `${JSON.stringify(record)}\n`, "utf8");

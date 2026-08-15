@@ -8,6 +8,13 @@
  *
  * Scheduling is a policy, not a preference. `interrupt` cuts the current answer off,
  * `when_idle` waits for a gap, and `silent` never speaks at all.
+ *
+ * ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
+ *   Delivery binds to `logicalSessionId`, not the physical session: a physical id
+ *   changes at every handoff commit, and queued delegations keyed to it strand.
+ * Ecosystem ADR 0002 — ../../../docs/decisions/0002-authority-generation.md
+ *   That binding is this repository's expression of INV-004: a superseded
+ *   physical session cannot claim a queued result.
  */
 
 import { randomUUID } from "node:crypto";
@@ -38,6 +45,7 @@ export class DelegationDeliveryScheduler {
   private readonly speaking = new Set<string>();
   private readonly queues = new Map<string, PendingDelivery[]>();
   private readonly closed = new Set<string>();
+  private readonly idleListeners = new Map<string, Set<() => void>>();
   private readonly clock: () => string;
   private readonly maxQueueLength: number;
 
@@ -63,6 +71,28 @@ export class DelegationDeliveryScheduler {
   public async markOutputFinished(sessionId: string): Promise<void> {
     this.speaking.delete(sessionId);
     await this.drain(sessionId);
+    this.notifyIdle(sessionId);
+  }
+
+  /**
+   * Whether the assistant is currently between outputs on this session.
+   *
+   * Exposed rather than reimplemented elsewhere: `when_idle` delivery and a handoff
+   * cutover are asking the same question, and two answers to it would drift apart the
+   * first time one of them learned about a new kind of output.
+   */
+  public isIdle(sessionId: string): boolean { return !this.speaking.has(sessionId); }
+
+  /** Called each time this session finishes an output. Returns an unsubscribe function. */
+  public onIdle(sessionId: string, listener: () => void): () => void {
+    const listeners = this.idleListeners.get(sessionId) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.idleListeners.set(sessionId, listeners);
+    return () => listeners.delete(listener);
+  }
+
+  private notifyIdle(sessionId: string): void {
+    for (const listener of [...(this.idleListeners.get(sessionId) ?? [])]) listener();
   }
 
   public async closeSession(sessionId: string): Promise<void> {
@@ -84,15 +114,20 @@ export class DelegationDeliveryScheduler {
    * explicitly dropped — never leaving it in an unobservable state.
    */
   public async deliver(event: Extract<DelegationEvent, { type: "delegation.completed" }>, delivery: DelegationDeliveryPolicy): Promise<void> {
-    const sessionId = event.sessionId;
-    if (!sessionId) {
-      this.report({ ...event, type: "delegation.delivery.dropped", delivery, reason: "NO_SESSION", occurredAt: this.clock() } as DelegationEvent);
-      return;
-    }
+    // Silent is decided before the session is looked at, because a silent result was never
+    // going to a session. Compaction is the case that matters: it deliberately carries no
+    // session id so it can outlive the session it is replacing, and reporting that as
+    // NO_SESSION described a working handoff as a lost answer — in the operator console it
+    // read as "výsledek zahozen" at the exact moment the user was waiting for one.
     if (delivery.mode === "silent") {
       // Silent is a real outcome, not a no-op: it is recorded so the result is auditable
       // even though nothing is spoken.
       this.report({ ...event, type: "delegation.delivery.sent", delivery, source: "delegation", occurredAt: this.clock() } as DelegationEvent);
+      return;
+    }
+    const sessionId = event.sessionId;
+    if (!sessionId) {
+      this.report({ ...event, type: "delegation.delivery.dropped", delivery, reason: "NO_SESSION", occurredAt: this.clock() } as DelegationEvent);
       return;
     }
     const binding = this.sessions.get(sessionId);

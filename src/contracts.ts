@@ -84,11 +84,18 @@ export interface DelegationMemoryReference {
   provenance: { sourceType: string; sourceId?: string };
 }
 
+export interface DelegationConversationReference {
+  turnId: string;
+  provenance: { sourceType: "conversation"; sourceId: string };
+}
+
+export type DelegationEvidenceReference = DelegationMemoryReference | DelegationConversationReference;
+
 export interface DelegationStructuredResult {
   schema: "delegation.result.v1";
   summary?: string;
   data: Record<string, unknown>;
-  references: DelegationMemoryReference[];
+  references: DelegationEvidenceReference[];
 }
 
 export interface DelegationEventBase {

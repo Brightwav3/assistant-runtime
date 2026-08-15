@@ -251,6 +251,17 @@ test("result parsing accepts only a well-formed delegation result", () => {
   assert.ok(parseDelegationResult({ schema: "delegation.result.v1", data: {}, references: [] }));
 });
 
+test("result parsing accepts conversation-turn evidence without inventing a memory id", () => {
+  const parsed = parseDelegationResult({
+    schema: "delegation.result.v1",
+    data: { evidence: [{ turnId: "turn-7", text: "Mám rád malé motorky." }] },
+    references: [{ turnId: "turn-7", provenance: { sourceType: "conversation", sourceId: "turn-7" } }],
+  });
+
+  assert.equal(parsed?.references[0]?.provenance.sourceId, "turn-7");
+  assert.equal("memoryId" in (parsed?.references[0] ?? {}), false);
+});
+
 /**
  * The selection used to be copied carefully into the DelegationRequest and then never
  * read again: the model came from the action runtime's constructor and the configured

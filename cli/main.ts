@@ -3,6 +3,7 @@ import { createAssistantRuntime } from "../src/composition.js";
 import { loadRuntimeSettings } from "../src/config.js";
 import { createHumanTrace } from "../src/console-log.js";
 import { verifyPlayback } from "../src/adapters.js";
+import { createRunTrace } from "../src/runtime-trace.js";
 import { memoryKinds, type CreateMemoryInput, type MemoryKind } from "memory-core";
 
 const json = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -36,7 +37,13 @@ async function main(): Promise<void> {
   humanStart = command === "start" && !args.includes("--json");
   if (command === "memory") return memoryCommand();
   const settings = await loadRuntimeSettings();
-  const trace = humanStart ? createHumanTrace() : (event: Record<string, unknown>) => json(event);
+  const terminalTrace = humanStart ? createHumanTrace() : (event: Record<string, unknown>) => json(event);
+  const rawTrace = command === "start" && settings.debug?.trace ? await createRunTrace(settings.debug.traceDir) : undefined;
+  const trace = (event: Record<string, unknown>): void => {
+    rawTrace?.record(event);
+    terminalTrace(event);
+  };
+  if (rawTrace) trace({ type: "debug.trace.started", path: rawTrace.path });
   const composition = await createAssistantRuntime(settings, trace);
   const runtime = composition.runtime;
   if (command === "health") json(await runtime.health());
@@ -60,6 +67,10 @@ async function main(): Promise<void> {
         setTimeout(stop, 4_000).unref?.();
       });
     });
+    if (rawTrace) {
+      trace({ type: "debug.trace.closed", path: rawTrace.path });
+      await rawTrace.close();
+    }
   } else {
     json({ error: { code: "COMMAND_INVALID", message: "Use start [--json], health, capabilities, status, or memory." } });
     process.exitCode = 2;

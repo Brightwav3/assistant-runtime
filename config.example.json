@@ -33,5 +33,12 @@
     "bargeInHoldMs": 800,
     "minErleDb": 6,
     "recoveryFrames": 25
+  },
+  "handoff": {
+    "enabled": false,
+    "contextLimitTokens": 128000,
+    "prepareThreshold": 0.7,
+    "readyTimeoutMs": 20000,
+    "idleWaitTimeoutMs": 30000
   }
 }

@@ -11,6 +11,8 @@
 
 import type { ExecutionOutcome, ToolDeclaration, ToolHandler } from "tool-system";
 import type { DelegationBroker, DelegationDeliveryPolicy, DelegationModelSelection } from "../contracts.js";
+import type { EpisodeUncertainPart } from "memory-core";
+import { parseUncertainParts } from "../heard-debug-tool.js";
 
 export const INTELLIGENCE_DELEGATE_TOOL = "intelligence_delegate";
 
@@ -21,6 +23,10 @@ export interface IntelligenceDelegateOptions {
   model: DelegationModelSelection;
   /** Supplies the live conversation identity. Bound by the runtime; the model cannot name another session. */
   correlation: () => { sessionId?: string; interactionId?: string };
+  /** Runtime-owned live conversation evidence. The voice model cannot select or alter it. */
+  selectedContext?: () => Promise<Array<{ sourceId: string; text: string; kind: "episode" }>>;
+  /** Atomically persists the utterance that caused this delegation before recall runs. */
+  captureCurrentTurn?: (input: { heardId: string; sessionId: string; verbatim: string; meaning: string; language: string; uncertainParts: EpisodeUncertainPart[] }) => Promise<void>;
   deadlineMs?: number;
   maximumModelCalls: number;
   maximumToolCalls: number;
@@ -39,8 +45,12 @@ export function intelligenceDelegateDeclaration(): ToolDeclaration {
       goal: { type: "string", description: "What the background intelligence should find out, stated plainly.", maxLength: DELEGATE_LIMITS.maxGoalLength },
       memory_ids: { type: "string", description: "Optional comma-separated memory IDs the user has already referred to.", maxLength: 1_200 },
       delivery: { type: "string", description: "How the answer should come back.", enum: ["interrupt", "when_idle", "silent"] },
+      current_verbatim: { type: "string", description: "Exact current user utterance that caused this delegation.", maxLength: 2_000 },
+      current_meaning: { type: "string", description: "Czech meaning of the current user utterance.", maxLength: 2_000 },
+      current_language: { type: "string", description: "Language of the current utterance.", maxLength: 32 },
+      current_uncertain_parts: { type: "string", description: "JSON uncertainty array using the same format as record_heard; [] if none.", maxLength: 1_000 },
     },
-    required: ["goal"],
+    required: ["goal", "current_verbatim", "current_meaning", "current_language", "current_uncertain_parts"],
     // Delegating creates a tracked background execution, which is runtime state rather
     // than a pure read, even though nothing outside the process is written.
     sideEffect: "local_state",
@@ -55,7 +65,7 @@ function parseMemoryIds(raw: unknown): string[] {
 
 export function intelligenceDelegateHandler(options: IntelligenceDelegateOptions): ToolHandler {
   const clock = options.clock ?? (() => Date.now());
-  return async (args): Promise<ExecutionOutcome> => {
+  return async (args, context): Promise<ExecutionOutcome> => {
     const goal = typeof args.goal === "string" ? args.goal.trim() : "";
     if (!goal) {
       return { kind: "error", error: { code: "invalid_arguments", message: "A goal is required to delegate.", retryable: false } };
@@ -68,13 +78,22 @@ export function intelligenceDelegateHandler(options: IntelligenceDelegateOptions
       : options.defaultDelivery.mode;
 
     const correlation = options.correlation();
+    if (options.captureCurrentTurn) {
+      const sessionId = correlation.sessionId;
+      const verbatim = typeof args.current_verbatim === "string" ? args.current_verbatim.trim() : "";
+      const meaning = typeof args.current_meaning === "string" ? args.current_meaning.trim() : "";
+      const language = typeof args.current_language === "string" ? args.current_language.trim() : "";
+      if (!sessionId || !verbatim || !meaning || !language) return { kind: "error", error: { code: "invalid_arguments", message: "The current utterance is required for delegation.", retryable: false } };
+      await options.captureCurrentTurn({ heardId: context.requestId, sessionId, verbatim, meaning, language, uncertainParts: parseUncertainParts(typeof args.current_uncertain_parts === "string" ? args.current_uncertain_parts : "[]") });
+    }
+    const selectedContext = await options.selectedContext?.() ?? [];
     const accepted = await options.broker.accept({
       requestId: `req_${clock()}_${Math.abs(hash(goal))}`,
       ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
       ...(correlation.interactionId ? { interactionId: correlation.interactionId } : {}),
       goal,
       selectedMemoryIds: parseMemoryIds(args.memory_ids),
-      selectedContext: [],
+      selectedContext,
       model: options.model,
       ...(options.deadlineMs ? { deadlineAt: new Date(clock() + options.deadlineMs).toISOString() } : {}),
       cancelOnSessionClose: options.cancelOnSessionClose,

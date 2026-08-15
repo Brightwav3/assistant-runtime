@@ -9,6 +9,14 @@
  * Authority stays here: the voice model requests, the broker decides. Model selection,
  * limits, deadlines, cancellation and delivery policy are all the runtime's, not the
  * requester's.
+ *
+ * INV-002 — a capability that cannot answer within its turn is routed through this
+ * broker, which mints its execution identity before any work begins. This is why the
+ * delegated memory and episode tools are declared here rather than in host-tools.
+ * Ecosystem ADR 0001 — ../../../docs/decisions/0001-capability-homes.md
+ * Ecosystem ADR 0002 — ../../../docs/decisions/0002-authority-generation.md
+ * Local ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
+ *   A delegated result never re-enters as something the user said.
  */
 
 import { randomUUID } from "node:crypto";
@@ -79,7 +87,14 @@ export function parseDelegationResult(value: unknown): DelegationStructuredResul
   if (!Array.isArray(candidate.references)) return undefined;
   const references = candidate.references.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null);
   if (references.length !== candidate.references.length) return undefined;
-  if (!references.every((entry) => typeof entry.memoryId === "string" && typeof entry.provenance === "object" && entry.provenance !== null)) return undefined;
+  if (!references.every((entry) => {
+    if (typeof entry.provenance !== "object" || entry.provenance === null) return false;
+    const provenance = entry.provenance as Record<string, unknown>;
+    if (typeof entry.memoryId === "string" && entry.memoryId.trim()) return true;
+    return typeof entry.turnId === "string" && entry.turnId.trim().length > 0
+      && provenance.sourceType === "conversation"
+      && provenance.sourceId === entry.turnId;
+  })) return undefined;
   return {
     schema: "delegation.result.v1",
     ...(typeof candidate.summary === "string" ? { summary: candidate.summary } : {}),

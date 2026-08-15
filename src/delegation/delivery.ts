@@ -8,6 +8,13 @@
  *
  * Scheduling is a policy, not a preference. `interrupt` cuts the current answer off,
  * `when_idle` waits for a gap, and `silent` never speaks at all.
+ *
+ * ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
+ *   Delivery binds to `logicalSessionId`, not the physical session: a physical id
+ *   changes at every handoff commit, and queued delegations keyed to it strand.
+ * Ecosystem ADR 0002 — ../../../docs/decisions/0002-authority-generation.md
+ *   That binding is this repository's expression of INV-004: a superseded
+ *   physical session cannot claim a queued result.
  */
 
 import { randomUUID } from "node:crypto";

@@ -1,6 +1,13 @@
 import { ActivationRuntime, type ActivationEvent } from "activation-core";
 import { REALTIME_INPUT_FORMAT, RealtimeCore, type AudioFrame, type RealtimeSessionConfig, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "realtime-core";
 import { spawn } from "node:child_process";
+/**
+ * Adapters presenting other cores to this runtime.
+ *
+ * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
+ *   No core imports another core. Translation happens here, thinly.
+ */
+
 import { randomUUID } from "node:crypto";
 import type { Activation, ActivationSource, ComponentHealth, NativeRealtimeDriver, RealtimeToolExecutor, RuntimeComponent } from "./contracts.js";
 import type { PcmPlayerSpec } from "./platform/contracts.js";

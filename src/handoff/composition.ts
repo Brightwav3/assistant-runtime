@@ -9,6 +9,9 @@
  * Whether the cutover is inaudible on real hardware is not decided here, and cannot be
  * decided from a development machine. What is decided here is that nothing is left half
  * owned: one attempt at a time, one terminal outcome, one owner of audio at every instant.
+ *
+ * ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
+ *   The binding to `logicalSessionId` is why this assembly can exist at all.
  */
 
 import type { DelegationBroker, DelegationModelSelection, StatePublisher } from "../contracts.js";

@@ -1,3 +1,12 @@
+/**
+ * The barge-in gate.
+ *
+ * ADR 0003 — docs/decisions/0003-barge-in-thresholds.md
+ *   The decay, the floor, and the warm-up are one decision in three parts. Until
+ *   echo has been measured the threshold is only the floor, and on a microphone
+ *   whose echo is louder than the floor that would admit the echo itself.
+ */
+
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { AdaptiveEchoProcessor, GateEchoProcessor, resolveConfig, type AudioFrame, type EchoProcessor } from "aec-system";

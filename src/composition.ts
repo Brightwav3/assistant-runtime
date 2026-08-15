@@ -1,3 +1,11 @@
+/**
+ * Composition root.
+ *
+ * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
+ *   This file is allowed to know every core because it is the only place that
+ *   assembles them. That permission does not extend to the cores themselves.
+ */
+
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";

@@ -9,6 +9,14 @@
  * Authority stays here: the voice model requests, the broker decides. Model selection,
  * limits, deadlines, cancellation and delivery policy are all the runtime's, not the
  * requester's.
+ *
+ * INV-002 — a capability that cannot answer within its turn is routed through this
+ * broker, which mints its execution identity before any work begins. This is why the
+ * delegated memory and episode tools are declared here rather than in host-tools.
+ * Ecosystem ADR 0001 — ../../../docs/decisions/0001-capability-homes.md
+ * Ecosystem ADR 0002 — ../../../docs/decisions/0002-authority-generation.md
+ * Local ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
+ *   A delegated result never re-enters as something the user said.
  */
 
 import { randomUUID } from "node:crypto";

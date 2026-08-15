@@ -144,7 +144,14 @@ disk. Turn it off again afterwards, and delete the files when you are done.
 8. Ask a follow-up that depends on something said *before* the handoff but which
    you did not plant explicitly. You are testing whether the summary is usable,
    not just whether one fact survived.
-9. Let the conversation end normally and confirm memory extraction still ran.
+9. **Ask for a detail the summary would not have kept.** Plant something with a
+   qualifier early — *"mám rád malé motorky"* — and after the handoff ask *"a
+   jaké motorky mám rád?"*. The summary carries "motorbikes"; only the turns
+   carry "small". A correct answer here means `conversation_recall` reached
+   across the swap; a vague one means it did not. Watch for
+   `delegation.tool` with `tool: "conversation_recall"`.
+10. Let the conversation end normally and confirm memory extraction ran **once**,
+    over the whole conversation — not twice, and not at the cutover.
 
 ### The adversarial variant, once the happy path passes
 
@@ -191,6 +198,10 @@ Copy these from the trace, not from memory:
   delivered or dropped.
 - **State Core**: `assistant.session.handoff_state` going
   `handoff_pending` → `handoff_active` → `idle`.
+- **`memory.episode.kept_open`** at the cutover, and exactly one
+  `memory.episode.closed` at the end. Two closes means the conversation was
+  recorded as two episodes and extracted twice, each over half of it — durable
+  beliefs formed before the user finished forming them.
 - **Compaction cost**, metered under role `compaction`, separately from `voice`
   and `delegation`. Confirm all three appear.
 - **The compacted summary itself.** Read it. This is the only opportunity to see

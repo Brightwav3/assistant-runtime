@@ -41,7 +41,11 @@ test("enabling delegation swaps the voice catalogue instead of widening it", asy
     assert.ok(component, "delegation runs as a lifecycle component");
     const capabilities = await component!.capabilities!() as { model: string; delegatedTools: string[] };
     assert.equal(capabilities.model, "gemini-2.5-flash");
-    assert.deepEqual([...capabilities.delegatedTools].sort(), ["memory_search", "memory_view"]);
+    // `conversation_recall` reads the turns of the conversation in progress. Extraction has
+    // not run over them yet, so without it the delegated model cannot answer a question
+    // about what was just said — least of all after a handoff, when the live session holds
+    // a summary rather than the words.
+    assert.deepEqual([...capabilities.delegatedTools].sort(), ["conversation_recall", "memory_search", "memory_view"]);
     assert.equal(capabilities.delegatedTools.includes("intelligence_delegate"), false);
   } finally {
     await composition.runtime.stop();

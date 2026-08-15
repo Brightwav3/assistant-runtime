@@ -209,6 +209,10 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   // Delegation needs memory: without it the delegated model has nothing to look up, and
   // an enabled-but-blind delegation would answer worse than not delegating at all.
   let activeSessionId: string | undefined;
+  // The conversation's identity, stable across a handoff. Declared here because delegation
+  // correlation, the episode writer, and the handoff assembly all resolve it at call time.
+  let logicalSessionId: string | undefined;
+  let currentPhysicalSessionId: string | undefined;
   // Settings can arrive from a hand-built object, not only from loadRuntimeSettings.
   // A missing block means "off", never a crash on startup.
   const delegationSettings: DelegationSettings = settings.delegation ?? { enabled: false, provider: "gemini", model: "", fallbackModels: [], deadlineMs: 45_000, maximumModelCalls: 6, maximumToolCalls: 12, cancelOnSessionClose: true, defaultDelivery: "when_idle", lateResultPolicy: "queue" };
@@ -219,6 +223,9 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
         delegation: delegationSettings,
         usage: usageSettings,
         memory,
+        // The turns of the conversation in progress. Extraction has not run over them yet,
+        // so this is the only place "what did I just say" can be answered from.
+        ...(episodes ? { episodes } : {}),
         subjectId: settings.memory.scopeSubjectId,
         correlation: () => (activeSessionId ? { sessionId: activeSessionId } : {}),
         ...(usageSettings.priceCatalog ? { priceCatalog: usageSettings.priceCatalog } : {}),
@@ -232,7 +239,12 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
     : new DeterministicMemoryExtractor();
   const extraction = memory ? new MemoryExtractionOrchestrator(memory, memoryExtractor, trace) : undefined;
   const heardInputEnabled = settings.debug?.heard === true && !options.realtimeToolExecutor;
-  const episodeMemory = episodes ? new EpisodeMemoryWriter({ episodes, subjectId: settings.memory.scopeSubjectId, extractor: extraction, preferHeardInput: heardInputEnabled, trace }) : undefined;
+  // An episode is the conversation, not the provider session rendering it. Without this a
+  // handoff would close the episode and extract memories over half a conversation — beliefs
+  // formed before the user had finished forming them.
+  const episodeMemory = episodes
+    ? new EpisodeMemoryWriter({ episodes, subjectId: settings.memory.scopeSubjectId, extractor: extraction, preferHeardInput: heardInputEnabled, resolveConversationId: (physicalSessionId) => logicalSessionId ?? physicalSessionId, trace })
+    : undefined;
 
   const tools = options.realtimeToolExecutor
     ? undefined
@@ -257,7 +269,6 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   // session boundary, because that is where they still exist once a session is replaced.
   const transcript = new RollingTranscript();
   const publisherForHandoff = statePublisher(state, trace);
-  let logicalSessionId: string | undefined;
   let handoff: HandoffComposition | undefined;
   let outputStartedAtMs: number | undefined;
   let userSpeechStartedAtMs: number | undefined;
@@ -282,6 +293,10 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
       userSpeechStartedAtMs = Number(event.timestampMs);
       handoff?.idle.markUserSpeechStarted();
     }
+    // Cleared on either signal. Waiting only for the transcript would leave the gate stuck
+    // on "user speaking" whenever a transcript is slow or never arrives, and the attempt
+    // would abort with NO_IDLE_GAP having never been given a gap it could find.
+    if (type === "realtime.input.speech_ended") handoff?.idle.markUserSpeechFinished();
     // Audio is counted, not ignored. A voice conversation's context is mostly audio, and an
     // estimate built from transcripts alone reads as nearly empty right up to termination.
     if (type === "realtime.output.audio_started") outputStartedAtMs = Number(event.timestampMs);
@@ -315,6 +330,12 @@ export async function createAssistantRuntime(settings: RuntimeSettings, trace: (
   // After a commit `session.id` is a different string, and every delegation queued against
   // the old one would be stranded at exactly the moment its answer is due.
   realtime.onSession((session, capabilities, kind) => {
+    // Said before the replaced session's close event can arrive, so the episode writer is
+    // never briefly told the conversation ended.
+    if (kind === "handoff" && currentPhysicalSessionId && currentPhysicalSessionId !== session.id) {
+      void episodeMemory?.markSuperseded(currentPhysicalSessionId);
+    }
+    currentPhysicalSessionId = session.id;
     if (kind === "interaction" || !logicalSessionId) {
       logicalSessionId = `lsn_${randomUUID()}`;
       transcript.reset();

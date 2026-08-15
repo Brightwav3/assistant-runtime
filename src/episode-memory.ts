@@ -9,6 +9,12 @@ export interface EpisodeMemoryWriterOptions {
   outputTranscriptMode?: "delta" | "cumulative";
   /** In diagnostic heard mode, the model reconstruction is the only user-turn source. */
   preferHeardInput?: boolean;
+  /**
+   * Maps a provider session id to the conversation it belongs to. Without it an episode is
+   * the session, which stops being true the moment a handoff replaces one: the conversation
+   * would be recorded as two episodes and extracted twice, each over half of it.
+   */
+  resolveConversationId?: (physicalSessionId: string) => string;
   extractor?: MemoryExtractionOrchestrator;
   trace?: (event: Record<string, unknown>) => void;
 }
@@ -51,11 +57,14 @@ export class EpisodeMemoryWriter {
   private readonly subjectId: string;
   private readonly outputTranscriptMode: "delta" | "cumulative";
   private readonly preferHeardInput: boolean;
+  private readonly resolveConversationId: (physicalSessionId: string) => string;
   private readonly extractor?: MemoryExtractionOrchestrator;
   private readonly trace: (event: Record<string, unknown>) => void;
   private readonly pendingOutput = new Map<string, { turnId: string; text: string }>();
   private readonly knownSessions = new Set<string>();
   private readonly closedSessions = new Set<string>();
+  /** Provider sessions a handoff replaced. Their closing ends a session, not a conversation. */
+  private readonly supersededSessions = new Set<string>();
   private readonly sessionsWithUserTurn = new Set<string>();
   private readonly turns = new Map<string, MemoryExtractionTurn[]>();
   private queue = Promise.resolve();
@@ -65,6 +74,7 @@ export class EpisodeMemoryWriter {
     this.subjectId = options.subjectId;
     this.outputTranscriptMode = options.outputTranscriptMode ?? "delta";
     this.preferHeardInput = options.preferHeardInput ?? false;
+    this.resolveConversationId = options.resolveConversationId ?? ((sessionId) => sessionId);
     this.extractor = options.extractor;
     this.trace = options.trace ?? (() => {});
   }
@@ -79,6 +89,28 @@ export class EpisodeMemoryWriter {
     return this.queue;
   }
 
+  /**
+   * Declares that a handoff replaced this provider session.
+   *
+   * Its `session.closed` will arrive moments later and must not be read as the conversation
+   * ending — that would close the episode and run extraction over half a conversation, which
+   * is the failure the conversation id exists to prevent. Any output still in flight is
+   * completed as interrupted, because the session carrying it is gone.
+   */
+  public markSuperseded(physicalSessionId: string): Promise<void> {
+    this.supersededSessions.add(physicalSessionId);
+    const conversationId = this.resolveConversationId(physicalSessionId);
+    this.queue = this.queue.then(async () => {
+      const output = this.pendingOutput.get(conversationId);
+      if (!output) return;
+      const turn = await this.episodes.completeTurn(output.turnId, "interrupted");
+      if (turn) this.recordTurn(conversationId, turn.turnId, "assistant", turn.text, turn.status);
+      this.pendingOutput.delete(conversationId);
+    });
+    this.trace({ type: "memory.session.superseded", physicalSessionId, conversationId });
+    return this.queue;
+  }
+
   public async flush(): Promise<void> {
     await this.queue;
     for (const sessionId of [...this.knownSessions]) {
@@ -88,7 +120,7 @@ export class EpisodeMemoryWriter {
   }
 
   private async process(event: RealtimeSpeechEvent): Promise<void> {
-    const sessionId = event.sessionId;
+    const sessionId = this.resolveConversationId(event.sessionId);
     if (this.closedSessions.has(sessionId)) return;
     if (event.type === "session.started") {
       await this.ensureSession(sessionId);
@@ -134,16 +166,25 @@ export class EpisodeMemoryWriter {
       return;
     }
     if (event.type === "session.closed" || event.type === "session.error") {
+      // A replaced session closing is the handoff working, not the conversation ending.
+      if (this.supersededSessions.has(event.sessionId)) {
+        this.supersededSessions.delete(event.sessionId);
+        this.trace({ type: "memory.episode.kept_open", physicalSessionId: event.sessionId, conversationId: sessionId, reason: "superseded_by_handoff" });
+        return;
+      }
       await this.finish(sessionId, event.type === "session.error" ? "failed" : "completed");
     }
   }
 
   private async processHeard(input: HeardInput): Promise<void> {
     const text = input.meaning.trim() || input.verbatim.trim();
-    if (!text || this.closedSessions.has(input.sessionId)) return;
-    await this.ensureSession(input.sessionId);
+    // The heard record carries the provider session it was captured in; the episode it
+    // belongs to is the conversation, which outlives that session across a handoff.
+    const sessionId = this.resolveConversationId(input.sessionId);
+    if (!text || this.closedSessions.has(sessionId)) return;
+    await this.ensureSession(sessionId);
     const transcriptConfidence = assessHeardInput(input);
-    const turn = await this.episodes.appendTurn(input.sessionId, {
+    const turn = await this.episodes.appendTurn(sessionId, {
       speaker: "user",
       text,
       status: "complete",
@@ -151,10 +192,10 @@ export class EpisodeMemoryWriter {
       transcriptConfidence,
     });
     if (!turn) return;
-    this.sessionsWithUserTurn.add(input.sessionId);
-    this.recordTurn(input.sessionId, turn.turnId, "user", turn.text, turn.status, transcriptConfidence);
+    this.sessionsWithUserTurn.add(sessionId);
+    this.recordTurn(sessionId, turn.turnId, "user", turn.text, turn.status, transcriptConfidence);
     if (transcriptConfidence === "unreliable") {
-      this.trace({ type: "memory.transcript.unreliable", sessionId: input.sessionId, turnId: turn.turnId, source: "heard", uncertainParts: input.uncertainParts });
+      this.trace({ type: "memory.transcript.unreliable", sessionId, turnId: turn.turnId, source: "heard", uncertainParts: input.uncertainParts });
     }
   }
 

@@ -12,6 +12,7 @@ export * from "./observability/usage-store.js";
 export * from "./handoff/contracts.js";
 export * from "./handoff/coordinator.js";
 export * from "./handoff/context-estimator.js";
+export * from "./handoff/compaction.js";
 export * from "./delegation/composition.js";
 export * from "./realtime-audio.js";
 export * from "./platform/index.js";

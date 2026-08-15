@@ -154,3 +154,54 @@ Why it is shaped this way:
   voice, text, retries, failures that still consumed tokens — emits one normalized
   usage record. Missing provider usage stays unknown rather than becoming zero, and an
   unpriced call follows an explicit policy that is fail-closed by default.
+
+## Session handoff
+
+A realtime session has a context limit. A conversation should not.
+
+**The runtime holds the conversation; the session only renders it.** Everything
+below follows from that inversion. If the authoritative record lived in the
+provider session, the session could not be replaced and its limits would become
+the conversation's limits. Because the record lives here, a session is a
+replaceable rendering surface and replacing it is an operational event.
+
+- **No provider-side warming, cache transfer, or mid-generation cutover.** As an
+  API client of a realtime provider we have access to none of them. What replaces
+  them is waiting: a real conversation produces a gap within seconds, and a gap is
+  a cheaper cutover point than any amount of parallel inference. No part of this
+  code or its documentation may be written as though instance warming were
+  available.
+- **One logical session id, many physical ones.** Delivery queues, correlation
+  ids, traces and usage all key on the logical id, which does not change across a
+  handoff.
+- **Exactly one session owns microphone and playback at every instant** —
+  including during the overlap and during every abort. `activate` is synchronous
+  in both the runtime's controller contract and Realtime Core, because an `await`
+  between deactivating one session and activating the next is a window in which
+  zero sessions own audio.
+- **The trigger is runtime-measured, never a provider signal.** Realtime providers
+  do not reliably announce that a limit is near. The estimator counts audio as
+  well as text, and errs high in both, because under-estimating context is the
+  unrecoverable direction.
+- **Compaction runs through the Delegation Broker**, off the live path, with
+  `delivery: silent` and no session binding — it has to survive the session it is
+  replacing. Its result is injected as context that describes the conversation;
+  a summary does not become an instruction by being prose.
+- **Idle detection is the delivery scheduler's, not a second copy.** A handoff
+  cutover and a `when_idle` delivery are asking the same question. Idle means both
+  directions are quiet, and the gap is re-checked immediately before the swap.
+- **An abort retains the working session and is reported.** Degrading to the
+  session that still works is correct; cutting to a half-prepared one is not. A
+  handoff that keeps failing is a real condition, and the alternative is a
+  conversation that dies at the limit with no trace of the attempts.
+- **Echo cancellation is rebound on commit.** The canceller models the path
+  between what we played and what the microphone hears; a commit changes that
+  path, and a filter still adapted to the old one stops recognising the
+  assistant's own voice.
+- **Compaction spend is metered as its own role.** It is spend the user never
+  asked for, and folding it into delegation would make an unattended cost look
+  like requested work.
+
+`handoff.enabled` is off by default, and the assembly in
+`src/handoff/composition.ts` is not yet attached to the live realtime path — see
+[PROGRESS.md](./PROGRESS.md) for exactly what that leaves unverified.

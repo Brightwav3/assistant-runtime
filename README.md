@@ -60,6 +60,27 @@ Enable it with `delegation.enabled` (off by default; it requires memory). The ma
 evidence procedure, including what remains unverified, is in
 [docs/delegated-voice-smoke-test.md](./docs/delegated-voice-smoke-test.md).
 
+## Session handoff
+
+A realtime session has a context limit; a conversation should not. The runtime
+holds the conversation and the session only renders it, so a session can be
+replaced without ending the conversation: a replacement is opened and prefilled
+with compacted context, and becomes active during a gap in the conversation.
+
+What this repository owns: the handoff lifecycle (`prepare` → `ready` →
+`commit` → `teardown`, plus `abort`), the runtime-measured context estimate and
+its threshold, compaction submitted through the Delegation Broker, the idle gate,
+published status, and bounded metrics. Realtime Core holds the sessions and is
+told nothing about handoff.
+
+What it explicitly does not do: warm a provider instance, transfer key-value
+cache, or cut over mid-generation. Those need access to the model instance, which
+an API client does not have.
+
+Configure it under `handoff` (`enabled` is off by default). **The assembly is not
+yet attached to the live realtime path**, so nothing has been verified against a
+live provider — see [PROGRESS.md](./PROGRESS.md).
+
 ## Commands
 
 ```powershell

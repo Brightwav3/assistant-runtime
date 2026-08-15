@@ -2,6 +2,68 @@
 
 ## Current state
 
+**Session handoff, Milestones 2–7, verified offline on 2026-08-15.** See
+[the plan](../PLAN-session-handoff.md) and
+[the changelog](../CHANGELOG-session-handoff.md) for milestone detail.
+
+`npm run verify` passed with 233 tests here, 50 in Realtime Core, 94 in
+Intelligence Core, 16 in State Core, and 42 in AEC System.
+
+Added under `src/handoff/`: `contracts.ts` (phases, events, logical/physical
+identity), `coordinator.ts` (the state machine), `context-estimator.ts`
+(runtime-measured estimate and latched threshold trigger), `compaction.ts`
+(compaction as an ordinary delegation), `idle-gate.ts`, `state-publisher.ts`,
+`metrics.ts`, `echo-rebind.ts`, and `composition.ts` (the assembly). `config.ts`
+gained a validated `handoff` block, off by default. `DelegationDeliveryScheduler`
+gained `isIdle` / `onIdle`; Realtime Core gained multi-session support;
+Intelligence Core's `UsageRole` gained `"compaction"`.
+
+Proven offline across nine test files:
+
+- `prepare → ready → commit → teardown` under one stable logical session id;
+- `commit` is idempotent, and a commit racing an abort publishes exactly one
+  terminal event;
+- **exactly one session owns audio after every transition on every path**,
+  including all aborts, asserted by sending a frame and checking which count
+  moved;
+- the live session keeps taking audio for the whole compaction;
+- the cutover waits for a gap, re-checks it, and never happens mid-speech in
+  either direction; a session that never goes idle aborts on its deadline;
+- every failure — provider refusing to open, transport dying mid-prefill, commit
+  failing at the transport, compaction failing or returning something unusable,
+  runtime shutdown in each phase — retains the working session and leaves nothing
+  orphaned;
+- a delegation submitted before the swap and completing after it is delivered to
+  the replacement under the same logical id;
+- handoff status is published to State Core and returns to `idle`;
+- the echo reference is rebound on commit, and never on prepare or abort;
+- `voice`, `delegation` and `compaction` meter as three distinct roles.
+
+### Blocked, and what that leaves unverified
+
+**The assembly is not attached to the live realtime path.** `composition.ts`
+binds delegation delivery to the *physical* session id, which is
+indistinguishable from a logical id only while there is one session per
+conversation. Introducing the logical id there changes a path that is verified on
+hardware and cannot be verified from here. `src/handoff/composition.ts` provides
+the whole assembly, so that wiring is one call plus rebinding delivery to
+`logicalSessionId`.
+
+These Definition-of-Done items therefore remain **UNVERIFIED**, and all of them
+need hardware:
+
+- a conversation continuing across a handoff with no audible gap;
+- prepare latency and overlap duration measured against a live provider;
+- echo cancellation verified across a real cutover — the rebinding is proven
+  offline; that it is *sufficient* on real hardware is not.
+
+Milestone 1 (memory import, migration inspection, documented recovery in
+`memory-core`) is **delivered** — see that repository's `PROGRESS.md`. What
+compaction drops is now recoverable, so the safety boundary that gates enabling
+handoff is satisfied.
+
+### Prior state, unchanged by the above
+
 **MARK I COMPLETE — the native realtime path is verified on real hardware; modular live-path verification belongs to the next iteration.** The repository contains a headless lifecycle/runtime, configuration-driven composition root, JSON CLI, public-core adapters, native realtime wiring, SQLite memory, State Core publication, default safe realtime tools, human-readable and JSON logs, offline tests, documentation, and repository hygiene configuration.
 
 Verified on 2026-08-11: `npm run verify` passed (TypeScript typecheck, 15 offline integration tests, and build). JSON `health`, `capabilities`, `status`, and memory commands returned valid structured output.

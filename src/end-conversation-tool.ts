@@ -31,7 +31,10 @@ export function endConversationDeclaration(): ToolDeclaration {
   };
 }
 
-export interface EndConversationOptions { episodes: Pick<EpisodeRuntime, "listTurns">; session: () => string | undefined; }
+export interface EndConversationOptions {
+  episodes: Pick<EpisodeRuntime, "listTurns">;
+  session: () => string | undefined;
+}
 
 const endRequest = /\b(to je vše|končíme|ukonč|vypni|už nic nepotřebuji)\b/iu;
 const confirmation = /\b(ano|jo|potvrzuji|ukončete se|vypněte se)\b/iu;
@@ -45,7 +48,12 @@ export function endConversationHandler(options?: EndConversationOptions): ToolHa
       const lastUser = [...recent].reverse().find((turn) => turn.speaker === "user");
       const priorUser = [...recent].reverse().find((turn) => turn.speaker === "user" && turn.turnId !== lastUser?.turnId);
       const askedConfirmation = recent.some((turn) => turn.speaker === "assistant" && /\b(ukončit|vypnout|skončit)\b/iu.test(turn.text));
-      if (!lastUser || !priorUser || !endRequest.test([priorUser.verbatim, priorUser.meaning, priorUser.text].filter(Boolean).join(" ")) || !askedConfirmation || !confirmation.test([lastUser.verbatim, lastUser.meaning, lastUser.text].filter(Boolean).join(" "))) {
+      // In heard mode, episode text is the voice-to-voice model's literal reconstruction;
+      // that model understands the audio while the provider transcript may be language-blind
+      // garbage. Do not switch this to realtime.transcript.final without first configuring
+      // and measuring provider language recognition. The semantic `meaning` field is still
+      // excluded here because it is a paraphrase, not literal evidence.
+      if (!lastUser || !priorUser || !endRequest.test(priorUser.text) || !askedConfirmation || !confirmation.test(lastUser.text)) {
         return { kind: "error", error: { code: "confirmation_required", message: "A prior end request and a later explicit confirmation are required.", retryable: false } };
       }
     }

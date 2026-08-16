@@ -184,6 +184,47 @@ test("intelligence_delegate returns a continuation immediately and does not awai
   assert.equal(report.outcome.acknowledgement.includes("Podívám se"), false);
 });
 
+test("a memory-write delegation without an explicit trigger is refused before background work", async () => {
+  const broker = new RecordingBroker();
+  const runtime = await voiceToolSystem(broker);
+  const report = await runtime.execute({
+    tool: INTELLIGENCE_DELEGATE_TOOL,
+    args: {
+      goal: "Ulož tuto informaci do paměti.",
+      current_verbatim: "Zapomněl jsem, že mám rád plechovky.",
+      current_meaning: "Uživatel říká, že zapomněl na svou oblibu plechovek.",
+      current_language: "cs",
+      current_uncertain_parts: "[]",
+    },
+    requestId: "call-memory-write",
+  });
+
+  assert.equal(report.outcome.kind, "error");
+  assert.match(report.outcome.kind === "error" ? report.outcome.error.message : "", /MEMORY_EXPLICIT_TRIGGER_REQUIRED/);
+  assert.match(report.outcome.kind === "error" ? report.outcome.error.message : "", /No memory was saved/);
+  assert.deepEqual(broker.accepted, []);
+});
+
+test("an implicit forgotten-fact statement is refused before background work even when the goal is paraphrased", async () => {
+  const broker = new RecordingBroker();
+  const runtime = await voiceToolSystem(broker);
+  const report = await runtime.execute({
+    tool: INTELLIGENCE_DELEGATE_TOOL,
+    args: {
+      goal: "Zjisti, co si uživatel uvědomil o svých preferencích.",
+      current_verbatim: "Zapomněl jsem, že mám rád plechovky.",
+      current_meaning: "Uživatel si uvědomil, že má rád plechovky.",
+      current_language: "cs",
+      current_uncertain_parts: "[]",
+    },
+    requestId: "call-implicit-forgotten-fact",
+  });
+
+  assert.equal(report.outcome.kind, "error");
+  assert.match(report.outcome.kind === "error" ? report.outcome.error.message : "", /MEMORY_EXPLICIT_TRIGGER_REQUIRED/);
+  assert.deepEqual(broker.accepted, []);
+});
+
 test("the delegation request is correlated to the live session, not to anything the model named", async () => {
   const broker = new RecordingBroker();
   const runtime = await voiceToolSystem(broker);

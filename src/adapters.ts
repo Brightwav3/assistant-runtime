@@ -6,6 +6,8 @@ import { spawn } from "node:child_process";
  *
  * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
  *   No core imports another core. Translation happens here, thinly.
+ * ADR 0004 — docs/decisions/0004-logical-interaction-lifecycle.md
+ *   The public open handle spans physical sessions replaced by handoff.
  */
 
 import { randomUUID } from "node:crypto";
@@ -113,6 +115,8 @@ export type RealtimeSessionListener = (
 /** Adapts Realtime Core sessions to the runtime's provider-neutral native driver. */
 export class RealtimeCoreAdapter implements NativeRealtimeDriver {
   private active?: RealtimeSpeechSession;
+  /** The runtime interaction spans several physical sessions during a handoff. */
+  private logicalLifecycle?: { done: Promise<void>; resolve: () => void; finished: boolean };
   private opening = false;
   private pendingFrames: Int16Array[] = [];
   private onActivity?: () => void;
@@ -187,9 +191,11 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     this.frameizer.reset();
     this.inputFrameTimestampMs = Date.now();
     this.onActivity = undefined;
+    this.finishLogicalLifecycle();
   }
 
   async open(input: { interactionId?: string; signal?: AbortSignal; onActivity?: () => void } = {}): Promise<{ close(): Promise<void>; done: Promise<void> }> {
+    const lifecycle = this.beginLogicalLifecycle();
     this.onActivity = input.onActivity;
     this.opening = true;
     this.pendingFrames = [];
@@ -210,6 +216,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       this.frameizer.reset();
       this.onActivity = undefined;
       this.trace({ type: "realtime.connect.failed", timestampMs: Date.now(), message: message(error) });
+      this.finishLogicalLifecycle(lifecycle);
       throw error;
     }
 
@@ -223,6 +230,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       this.opening = false;
       this.onActivity = undefined;
       this.trace({ type: "realtime.connect.failed", timestampMs: Date.now(), message: message(error) });
+      this.finishLogicalLifecycle(lifecycle);
       throw error;
     }
 
@@ -245,7 +253,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
       throw error;
     }
 
-    return attachment;
+    return { close: () => this.closeLogicalSession(lifecycle), done: lifecycle.done };
   }
 
   /**
@@ -320,6 +328,28 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
     if (!attachment) return;
     this.attachments.delete(sessionId);
     await attachment.close();
+  }
+
+  private beginLogicalLifecycle(): { done: Promise<void>; resolve: () => void; finished: boolean } {
+    let resolve!: () => void;
+    const lifecycle = { done: new Promise<void>((fulfill) => { resolve = fulfill; }), resolve, finished: false };
+    this.logicalLifecycle = lifecycle;
+    return lifecycle;
+  }
+
+  private finishLogicalLifecycle(lifecycle = this.logicalLifecycle): void {
+    if (!lifecycle || lifecycle.finished) return;
+    lifecycle.finished = true;
+    lifecycle.resolve();
+  }
+
+  private async closeLogicalSession(lifecycle: { done: Promise<void>; resolve: () => void; finished: boolean }): Promise<void> {
+    if (this.logicalLifecycle !== lifecycle) {
+      this.finishLogicalLifecycle(lifecycle);
+      return;
+    }
+    for (const sessionId of [...this.attachments.keys()]) await this.closeSession(sessionId);
+    this.finishLogicalLifecycle(lifecycle);
   }
 
   /** The session that currently owns audio, or undefined between interactions. */
@@ -409,6 +439,7 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
             this.active = undefined;
             this.clearCaptureIdleFlush();
             this.onActivity = undefined;
+            this.finishLogicalLifecycle();
           }
           playback.close();
           emitPlaybackMetrics(event.timestampMs);
@@ -417,6 +448,12 @@ export class RealtimeCoreAdapter implements NativeRealtimeDriver {
         }
       }
       this.attachments.delete(session.id);
+      if (this.active === session) {
+        this.active = undefined;
+        this.clearCaptureIdleFlush();
+        this.onActivity = undefined;
+        this.finishLogicalLifecycle();
+      }
       this.trace({ type: "realtime.stream.ended", timestampMs: Date.now(), sessionId: session.id, chunks });
     })();
 

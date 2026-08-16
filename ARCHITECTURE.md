@@ -202,6 +202,14 @@ replaceable rendering surface and replacing it is an operational event.
   asked for, and folding it into delegation would make an unattended cost look
   like requested work.
 
-`handoff.enabled` is off by default, and the assembly in
-`src/handoff/composition.ts` is not yet attached to the live realtime path — see
-[PROGRESS.md](./PROGRESS.md) for exactly what that leaves unverified.
+`handoff.enabled` is off by default. When it is enabled and delegation is
+available, the live composition creates the handoff assembly for each logical
+conversation, records the runtime context estimate, and starts the replacement
+session through `src/handoff/composition.ts`. Delivery is rebound to the stable
+logical session id when the physical realtime session changes. The wiring is
+covered by offline tests and was qualified on Windows hardware on 2026-08-16:
+the operator heard no cutover gap and reported stable echo cancellation across
+the physical replacement. Provider transcript text is not canonical user
+intent when language detection is wrong; the voice-to-voice heard record is.
+See [PROGRESS.md](./PROGRESS.md) for the evidence split and the separate memory
+wording follow-up.

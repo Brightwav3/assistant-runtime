@@ -51,6 +51,9 @@ import type { HeardInput } from "../episode-memory.js";
  * Its job is to look things up and hand back evidence in one fixed shape, because the
  * broker validates that shape and refuses anything else rather than let unvalidated
  * prose reach the conversation.
+ * Ecosystem ADR 0003 — ../../../docs/decisions/0003-delegation-tool-failures-remain-failed.md
+ *   Tool errors are correlated by the parent request before the broker publishes a
+ *   completed result, so the voice model cannot narrate a refused side effect as done.
  */
 const DELEGATED_MODEL_BRIEF = [
   "You are the background research model for a Czech voice assistant. You never speak to the user.",
@@ -225,6 +228,8 @@ export function createDelegation(input: DelegationCompositionInput): DelegationC
     },
   });
 
+  const failedToolRequests = new Set<string>();
+
   const action = new ActionRuntime({
     models: gateway,
     provider_id: input.delegation.provider,
@@ -232,13 +237,28 @@ export function createDelegation(input: DelegationCompositionInput): DelegationC
     // Without this the model has tools and no brief: it answers in prose, the broker
     // refuses the prose, and every delegation fails while looking like a model problem.
     context: new ContextAssembler({ system_instructions: [DELEGATED_MODEL_BRIEF] }),
-    tools: new ToolSystemToolClient(delegatedTools, input.onLifecycle),
+    tools: new ToolSystemToolClient(delegatedTools, input.onLifecycle, (outcome) => {
+      if (!outcome.requestId || outcome.outcomeKind !== "error") return;
+      failedToolRequests.add(outcome.requestId);
+      trace({
+        type: "delegation.tool.failed",
+        requestId: outcome.requestId,
+        tool: outcome.tool,
+        ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+      });
+    }),
     policy: new ToolSystemPolicyClient(),
     maximum_iterations: input.delegation.maximumModelCalls,
   });
 
   const intelligence = new IntelligenceRuntime({ action });
-  const broker = new RuntimeDelegationBroker({ intelligence });
+  const broker = new RuntimeDelegationBroker({
+    intelligence,
+    resultGuard: ({ request }) => {
+      if (!failedToolRequests.delete(request.requestId)) return undefined;
+      return { code: "DELEGATION_TOOL_FAILED", retryable: false };
+    },
+  });
   /**
    * Forwards the diagnostic fields, not just the event name. Dropping `failure` and
    * `reason` here is what turned a specific error code into "neznámý kód" in the console
@@ -259,7 +279,8 @@ export function createDelegation(input: DelegationCompositionInput): DelegationC
   broker.onEvent((event) => {
     forward(event);
     if (event.type !== "delegation.completed") return;
-    void delivery.deliver(event, { mode: input.delegation.defaultDelivery, lateResult: input.delegation.lateResultPolicy });
+    // 0002-delegated-results-are-never-the-user.md — delivery timing is chosen per delegation, including silent compaction.
+    void delivery.deliver(event, event.delivery);
   });
 
   return {

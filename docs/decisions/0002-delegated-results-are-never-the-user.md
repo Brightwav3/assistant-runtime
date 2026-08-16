@@ -86,6 +86,8 @@ result after it — the worst failure shape, because it works in testing.
 
 - `src/delegation/delivery.ts`
 - `src/delegation/broker.ts`
+- `src/delegation/composition.ts`
+- `src/contracts.ts`
 - `src/handoff/composition.ts`
 
 ## Explicit non-decisions

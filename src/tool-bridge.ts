@@ -12,6 +12,9 @@
  * ADR 0001 — docs/decisions/0001-zero-imports-between-cores.md
  *   A retry, default, or argument fix added here is a guarantee that exists for
  *   callers who route through this file and not for callers who do not.
+ * Ecosystem ADR 0003 — ../../docs/decisions/0003-delegation-tool-failures-remain-failed.md
+ *   Parent request identity and terminal tool outcome cross the action-loop boundary
+ *   so Assistant Runtime can refuse a completed-looking result after a tool failure.
  */
 
 import type { PolicyClient, PolicyDecision, ToolClient, ToolDescriptor, ToolRequest, ToolResult } from "intelligence-core";
@@ -118,7 +121,11 @@ function toRealtimeMetadata(declaration: ToolDeclaration): RealtimeToolDeclarati
 }
 
 export class ToolSystemToolClient implements ToolClient {
-  constructor(private readonly runtime: ToolRuntime, private readonly onLifecycle?: (request: LifecycleRequest) => void) {}
+  constructor(
+    private readonly runtime: ToolRuntime,
+    private readonly onLifecycle?: (request: LifecycleRequest) => void,
+    private readonly onOutcome?: (outcome: ToolOutcomeObservation) => void,
+  ) {}
 
   async discover(): Promise<ToolDescriptor[]> {
     return this.runtime.discover().map((declaration) => ({
@@ -134,9 +141,22 @@ export class ToolSystemToolClient implements ToolClient {
       signal,
     );
     if (report.outcome.kind === "lifecycle") this.onLifecycle?.({ action: report.outcome.action, reason: report.outcome.reason, tool: request.tool_id });
+    this.onOutcome?.({
+      requestId: request.request_id,
+      tool: request.tool_id,
+      outcomeKind: report.outcome.kind,
+      ...(report.outcome.kind === "error" ? { errorCode: report.outcome.error.code } : {}),
+    });
 
     return { tool_call_id: request.id, content: describeToolOutcome(report.outcome) };
   }
+}
+
+export interface ToolOutcomeObservation {
+  requestId?: string;
+  tool: string;
+  outcomeKind: "result" | "error" | "continuation" | "silent" | "lifecycle";
+  errorCode?: string;
 }
 
 export interface LifecycleRequest { action: "shutdown" | "restart"; reason: string; tool: string; }

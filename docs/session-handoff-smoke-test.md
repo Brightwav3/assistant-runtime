@@ -6,12 +6,17 @@ page: the fake provider proves the lifecycle, not that a Gemini session prefills
 in time, not that a room's echo canceller re-converges on a new playback path,
 and not that a cutover is inaudible to a person.
 
-> **This test is now runnable.** The wiring landed on `feat/handoff-wiring`:
+> **This test is hardware-qualified on Windows.** The wiring landed on
+> `feat/handoff-wiring`; the fifth run passed live handoff, compaction delivery,
+> post-handoff recall, delegated shutdown, and the operator confirmed an
+> inaudible cutover with stable AEC. The full session-handoff scenario is
+> **VERIFIED**. A separate follow-up remains for the newly clarified wording
+> when an implicit memory write is refused:
 > `composition.ts` builds the assembly per interaction, feeds the estimator from
 > the realtime event stream, and binds delegation delivery to a logical session
-> id. Nothing on this page has been run yet — every UNVERIFIED row below is still
-> UNVERIFIED, and the procedure is unchanged from when it was written, which is
-> the point of having written it in advance.
+> id. The lifecycle repair passed the second hardware run. The delivery-policy
+> repair passes offline and the tool-failure/preflight safety passed on
+> hardware; only the clarified refusal wording still needs qualification.
 
 ## What is already proven without hardware
 
@@ -25,14 +30,108 @@ and not that a cutover is inaudible to a person.
 | Status published; echo reference rebound on commit only | `tests/handoff-observability.test.ts` | VERIFIED offline |
 | Logical id stable; delegation spanning the swap delivered | `tests/handoff-correlation.test.ts` | VERIFIED offline |
 | Disconnect and shutdown in every phase leave one session | `tests/handoff-resilience.test.ts` | VERIFIED offline |
+| Failed delegated tool cannot become a completed result | `tests/delegation-reliability.test.ts` | VERIFIED offline |
 | Multi-session Realtime Core | `speech-system/realtime core` — `tests/multi-session.test.ts` | VERIFIED offline |
 | Export/import round trip, including legacy v1 | `memory-core` — `tests/integration/import-export.test.ts` | VERIFIED offline |
-| A Gemini session accepts prefilled context and continues coherently | — | **UNVERIFIED** |
-| Prefill completes inside `readyTimeoutMs` against a live provider | — | **UNVERIFIED** |
-| A cutover is inaudible to a person | — | **UNVERIFIED** |
-| Echo cancellation re-converges on the new playback path | — | **UNVERIFIED** |
+| A Gemini session accepts prefilled context and continues coherently | `trace-20260816-152512.jsonl`; post-handoff recall | **VERIFIED on Windows hardware** |
+| Prefill completes inside `readyTimeoutMs` against a live provider | `realtime.prefill.acknowledged`; `handoff.ready` | **VERIFIED on Windows hardware** |
+| A cutover is inaudible to a person | Operator listening observation during fifth run | **VERIFIED on Windows hardware** |
+| Echo cancellation re-converges on the new playback path | Operator reports stable AEC through cutover | **VERIFIED on Windows hardware** |
 
-The four unverified rows are the entire purpose of this test.
+The four hardware rows are now qualified on the tested Windows setup. The
+remaining follow-up is the exact spoken wording of the implicit-memory refusal,
+which is outside the handoff lifecycle itself.
+
+## Second hardware result — 2026-08-16 — LIFECYCLE PASS / OVERALL DEGRADED
+
+Trace: `C:\Users\Sajmon\Jarvis\.runtime\traces\trace-20260816-144553.jsonl`.
+
+The rebuilt run reached prepare, compaction, native prefill, ready, and commit.
+The logical session stayed stable, the physical session changed, no second
+activation or greeting occurred after commit, and exactly one
+`memory.episode.closed` was recorded.
+
+The trace also exposed a separate live wiring defect: compaction asked for
+`delivery.mode: "silent"`, but the pre-fix broker listener passed the configured
+`when_idle` default to the scheduler. Since compaction had no session id, the
+console reported `NO_SESSION` even though compaction completed. The fix now
+carries the per-delegation policy through `delegation.completed` and is covered
+by an integration regression; repeat the hardware run after rebuilding. The
+delegated `end_conversation` path was not invoked in this run; the farewell and
+later close do not qualify as confirmed shutdown. Post-handoff recall,
+no-audible-gap measurement, and AEC across cutover remain unverified.
+
+## Third hardware result — 2026-08-16 — MEMORY GUARD SAFE / CLAIM DEGRADED
+
+Trace: `C:\Users\Sajmon\Jarvis\.runtime\traces\trace-20260816-150314.jsonl`.
+
+The runtime correctly rejected the non-explicit phrase
+`Zapomněl jsem, že mám rád plechovky.` with
+`MEMORY_EXPLICIT_TRIGGER_REQUIRED`; no durable memory was created. The delegated
+model nevertheless returned a completed-looking save result, so MARK falsely
+claimed that the fact had been stored.
+
+This was a delegation-boundary defect, not an unsafe memory write. The broker
+now preserves tool failure by parent request id and refuses to publish or deliver
+`delegation.completed` after a failed tool. The voice tool also refuses an
+obvious memory-write delegation before background work when the current phrase
+has no explicit remember trigger. The offline regression is
+`a failed memory tool cannot become a completed delegation`. Repeat the negative
+case and then the positive explicit instruction after rebuilding.
+
+## Fourth hardware result — 2026-08-16 — FALSE-SUCCESS REPAIR PASS / PREFLIGHT PENDING
+
+Trace: `C:\Users\Sajmon\Jarvis\.runtime\traces\trace-20260816-151924.jsonl`.
+
+The pre-run process check found no second assistant-runtime process. The run had
+one activation, one greeting, one physical realtime session, and one episode
+close. The rejected `memory_create` produced `DELEGATION_TOOL_FAILED`; there was
+no `delegation.completed`, no delivered result, and no explicit memory creation.
+MARK did not claim that the memory was saved. This is a hardware PASS for the
+original false-success repair.
+
+The model still attempted `memory_create` once, so the console showed its
+expected refusal. A subsequent runtime preflight now recognizes the
+paraphrased non-explicit sentence `Zapomněl jsem, že mám rád ...` and rejects it
+before background acceptance. That refinement is covered offline and remains
+unverified on hardware. No handoff occurred in this run.
+
+## Fifth hardware result — 2026-08-16 — HANDOFF / RECALL / SHUTDOWN WIRING PASS
+
+Trace: `C:\Users\Sajmon\Jarvis\.runtime\traces\trace-20260816-152512.jsonl`.
+
+The run reached prepare, compaction, native prefill, ready, commit, and physical
+session replacement under one stable logical session id. There was no second
+greeting. Compaction delivery was sent without `NO_SESSION`. After the swap,
+`Cože jsem zapomněl?` returned the earlier plechovky fact. The delegated
+`end_conversation` tool reached the lifecycle boundary, the host honoured
+shutdown, and the episode closed once.
+
+The provider transcript rendered the final confirmation as `anomalous`, but the
+voice-to-voice model's heard record correctly understood it as `Ano, máš.`. The
+provider transcript is unreliable here because its language detection is wrong;
+the voice-to-voice understanding is the authority in heard mode. The operator
+confirmed that the cutover was inaudible and AEC remained stable. The latest
+runtime wording change for refused memory writes still needs a separate hardware
+rerun.
+
+## First hardware result — 2026-08-16 — DEGRADED / NOT VERIFIED
+
+Run configuration: Gemini Live `gemini-3.1-flash-live-preview`, delegation and
+compaction `gemini-3.5-flash-lite`, `contextLimitTokens: 800`,
+`prepareThreshold: 0.7`, `readyTimeoutMs: 20000`.
+
+The trace reached `handoff.prepared`, compaction start/completion, native
+prefill acknowledgement, `handoff.ready`, and `handoff.committed`. The logical
+session id stayed stable and `memory.episode.kept_open` was emitted.
+
+The run is not a pass: after the old physical session closed, the runtime treated
+the original physical `session.done` as the end of the logical interaction. A
+later activation therefore opened a new logical session and spoke the greeting
+again; the trace ended with two `memory.episode.closed` events. This is fixed in
+the logical lifecycle of `src/adapters.ts` and guarded by
+`tests/handoff-wiring.test.ts`. Rerun the full procedure after rebuilding; do not
+promote the earlier handoff to hardware VERIFIED.
 
 ---
 

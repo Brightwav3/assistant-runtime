@@ -83,6 +83,7 @@ const SYSTEM_PERSONA = [
 
 const HEARD_DEBUG_INSTRUCTION = [
   "DIAGNOSTICKÝ REŽIM: pokud pro promluvu voláš intelligence_delegate, nevolej navíc record_heard, protože composite delegate ji zapíše sám. Jen u nedelagované promluvy zavolej record_heard.",
+  "Toto je voice-to-voice porozumění: tvůj verbatim a meaning jsou autoritativní porozumění zvuku pro runtime. Providerový realtime transcript může být při špatně určeném jazyce nesmyslný a nesmí přepsat to, co jsi skutečně rozuměl.",
   "Do verbatim napiš nejlepší doslovnou rekonstrukci slov, která jsi slyšel, bez parafráze.",
   "Do meaning napiš česky, co si myslíš, že uživatel významově řekl.",
   "Do language napiš zjištěný jazyk. Do uncertain_parts napiš JSON pole objektů s text, uncertainty low|medium|high a případnými alternatives; při úplné jistotě napiš [].",
@@ -172,6 +173,7 @@ async function memoryInstruction(memory: MemoryRuntime | undefined, subjectId: s
  */
 const DELEGATION_INSTRUCTION = [
   "Nemáš přímý přístup k paměti uživatele a NEMÁŠ žádné vzpomínky ve svém kontextu.",
+  "Jsi voice-to-voice model: current_verbatim a current_meaning vycházejí z tvého porozumění zvuku. Nedůvěřuj automatickému providerovému transcriptu, pokud se liší kvůli špatně určenému jazyku.",
   "Kdykoli se uživatel ptá na něco, co jste probírali dřív, na uloženou vzpomínku, projekt, osobu nebo dřívější rozhodnutí,",
   "zavolej nástroj intelligence_delegate a do parametru goal napiš česky, co je potřeba zjistit.",
   "Do každého intelligence_delegate vždy přidej current_verbatim, current_meaning, current_language a current_uncertain_parts pro právě slyšenou uživatelskou větu; tím se věta atomicky zapíše před delegací.",

@@ -71,6 +71,8 @@ export class AssistantRuntime {
     const driver = this.dependencies.nativeRealtime; if (!driver) throw new AssistantRuntimeError("MODE_UNAVAILABLE", "Native realtime driver is not configured.");
     const session = await driver.open({ interactionId: interaction.interactionId, signal: this.abort!.signal, onActivity: () => this.armInactivity(interaction.interactionId) });
     this.closeSession = session.close;
+    // ADR 0004-logical-interaction-lifecycle.md — the driver handle represents the logical interaction, so a handoff's
+    // superseded physical session must not finish this interaction.
     void session.done.finally(() => { if (this.current?.interactionId === interaction.interactionId) void this.finish(interaction); });
   }
   private async finish(interaction: InteractionStatus): Promise<void> {

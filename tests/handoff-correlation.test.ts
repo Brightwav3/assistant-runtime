@@ -23,6 +23,7 @@ const completed = (executionId: string): Extract<DelegationEvent, { type: "deleg
   executionId,
   sessionId: LOGICAL,
   status: "completed",
+  delivery: { mode: "when_idle", lateResult: "queue" },
   result: { schema: "delegation.result.v1", summary: "found it", data: {}, references: [] },
   occurredAt: "2026-08-15T10:00:00.000Z",
 });

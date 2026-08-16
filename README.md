@@ -77,9 +77,17 @@ What it explicitly does not do: warm a provider instance, transfer key-value
 cache, or cut over mid-generation. Those need access to the model instance, which
 an API client does not have.
 
-Configure it under `handoff` (`enabled` is off by default). **The assembly is not
-yet attached to the live realtime path**, so nothing has been verified against a
-live provider — see [PROGRESS.md](./PROGRESS.md).
+Configure it under `handoff` (`enabled` is off by default). When enabled
+together with delegation, the assembly is attached to the live realtime path.
+The 2026-08-16 Windows hardware qualification reached prepare, compaction,
+prefill, commit, post-handoff recall, and delegated shutdown; the operator
+confirmed that the cutover was inaudible and that AEC remained effective. The
+session-handoff scenario is therefore **VERIFIED** on that hardware. The
+voice-to-voice model's heard understanding is authoritative for Czech input;
+provider transcript text may be garbage when its language detection is wrong.
+See
+[PROGRESS.md](./PROGRESS.md) and the
+[manual smoke test](./docs/session-handoff-smoke-test.md).
 
 ## Commands
 

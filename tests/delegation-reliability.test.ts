@@ -40,6 +40,8 @@ function gatewayReturning(...responses: ModelResponse[]): ModelGateway {
 
 async function composed(overrides: Partial<DelegationCompositionInput> = {}) {
   const traces: Array<Record<string, unknown>> = [];
+  const extraTrace = overrides.trace;
+  const { trace: _ignoredTrace, ...compositionOverrides } = overrides;
   const memory = overrides.memory ?? (await memoryRuntime());
   const composition = createDelegation({
     delegation,
@@ -47,13 +49,104 @@ async function composed(overrides: Partial<DelegationCompositionInput> = {}) {
     memory,
     subjectId: "user-1",
     correlation: () => ({ sessionId: "session-1", interactionId: "interaction-1" }),
-    trace: (event) => traces.push(event),
+    trace: (event) => { traces.push(event); extraTrace?.(event); },
     modelGateway: gatewayReturning({ type: "final", message: { role: "assistant", content: JSON.stringify({ schema: "delegation.result.v1", data: {}, references: [] }) } }),
-    ...overrides,
+    ...compositionOverrides,
   });
   await composition.start();
   return { composition, traces, memory };
 }
+
+test("the live broker preserves silent delivery for an unbound compaction result", async () => {
+  let resolveDelivery!: (event: Record<string, unknown>) => void;
+  const delivery = new Promise<Record<string, unknown>>((resolve) => { resolveDelivery = resolve; });
+  const { composition, traces } = await composed({
+    trace: (event) => {
+      if (event.type === "delegation.delivery.sent" || event.type === "delegation.delivery.dropped") resolveDelivery(event);
+    },
+  });
+
+  await composition.broker.accept({
+    requestId: "compaction-request",
+    goal: "silent compaction",
+    selectedMemoryIds: [],
+    selectedContext: [],
+    model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels: [] },
+    cancelOnSessionClose: false,
+    maximumModelCalls: 1,
+    maximumToolCalls: 0,
+    delivery: { mode: "silent", lateResult: "drop" },
+  });
+
+  const result = await delivery;
+  assert.equal(result.type, "delegation.delivery.sent");
+  assert.equal(traces.some((event) => event.type === "delegation.delivery.dropped"), false);
+  await composition.stop();
+});
+
+test("a failed memory tool cannot become a completed delegation", async () => {
+  const episodes = {
+    listTurns: async () => [{
+      turnId: "turn-1",
+      speaker: "user",
+      text: "Zapomněl jsem, že mám rád plechovky.",
+      verbatim: "Zapomněl jsem, že mám rád plechovky.",
+      meaning: "Uživatel uvádí, že zapomněl na svou oblibu plechovek.",
+      status: "complete",
+      startedAt: "2026-08-16T15:03:15.000Z",
+      transcriptConfidence: "reliable",
+      uncertainParts: [],
+    }],
+  } as NonNullable<DelegationCompositionInput["episodes"]>;
+  const { composition, traces } = await composed({
+    episodes,
+    modelGateway: gatewayReturning(
+      {
+        type: "tool_requests",
+        tool_requests: [{
+          id: "call-memory-create",
+          tool_id: "memory_create",
+          arguments: { turn_id: "turn-1", kind: "fact", content: "Uživatel má rád plechovky." },
+        }],
+      },
+      {
+        type: "final",
+        message: {
+          role: "assistant",
+          content: JSON.stringify({
+            schema: "delegation.result.v1",
+            summary: "Paměť byla uložena.",
+            data: { operation: "memory_create", status: "created", memoryId: "invented" },
+            references: [{ turnId: "turn-1", provenance: { sourceType: "conversation", sourceId: "turn-1" } }],
+          }),
+        },
+      },
+    ),
+  });
+
+  const failed = new Promise<Extract<import("../src/contracts.js").DelegationEvent, { type: "delegation.failed" }>>((resolve) => {
+    composition.broker.onEvent((event) => { if (event.type === "delegation.failed") resolve(event); });
+  });
+  await composition.broker.accept({
+    requestId: "req-memory-rejected",
+    sessionId: "session-1",
+    goal: "Ulož tento údaj do paměti.",
+    selectedMemoryIds: [],
+    selectedContext: [],
+    model: { provider: "gemini", model: "gemini-2.5-flash", fallbackModels: [] },
+    cancelOnSessionClose: true,
+    maximumModelCalls: 2,
+    maximumToolCalls: 1,
+    delivery: { mode: "when_idle", lateResult: "queue" },
+  });
+
+  const failure = await failed;
+  assert.equal(failure.failure.code, "DELEGATION_TOOL_FAILED");
+  assert.equal(traces.some((event) => event.type === "delegation.completed"), false);
+  assert.equal(traces.some((event) => event.type === "delegation.delivery.sent"), false);
+  assert.ok(traces.some((event) => event.type === "delegation.tool.failed" && event.tool === "memory_create"));
+  await composition.stop();
+});
 
 test("the delegated catalogue is memory only and never contains the delegation tool", async () => {
   const { composition } = await composed();
@@ -145,7 +238,7 @@ test("delivery survives a provider session that closed while a result was queued
 
   await composition.delivery.deliver({
     type: "delegation.completed", requestId: "req-1", executionId: "del-1", sessionId: "session-1",
-    status: "completed", result: { schema: "delegation.result.v1", data: {}, references: [] },
+    status: "completed", delivery: { mode: "when_idle", lateResult: "queue" }, result: { schema: "delegation.result.v1", data: {}, references: [] },
     occurredAt: "2026-08-14T12:00:00.000Z",
   }, { mode: "when_idle", lateResult: "queue" });
   assert.equal(composition.delivery.queuedCount("session-1"), 1);

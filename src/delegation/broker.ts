@@ -17,6 +17,8 @@
  * Ecosystem ADR 0002 — ../../../docs/decisions/0002-authority-generation.md
  * Local ADR 0002 — docs/decisions/0002-delegated-results-are-never-the-user.md
  *   A delegated result never re-enters as something the user said.
+ * Ecosystem ADR 0003 — ../../../docs/decisions/0003-delegation-tool-failures-remain-failed.md
+ *   A valid result shape is not enough when a tool in the same request failed.
  */
 
 import { randomUUID } from "node:crypto";
@@ -41,6 +43,8 @@ export interface DelegationBrokerOptions {
   acknowledgementText?: string;
   clock?: () => string;
   idFactory?: () => string;
+  /** Rejects a syntactically valid result when runtime evidence makes it non-authoritative. */
+  resultGuard?: (input: { request: DelegationRequest; result: DelegationStructuredResult }) => DelegationFailure | undefined;
 }
 
 const DEFAULT_ACKNOWLEDGEMENT =
@@ -199,7 +203,12 @@ export class RuntimeDelegationBroker implements DelegationBroker {
         this.finish(executionId, { type: "delegation.failed", ...base, status: "failed", failure: { code: "DELEGATION_RESULT_INVALID", retryable: false }, occurredAt: this.clock() });
         return;
       }
-      this.finish(executionId, { type: "delegation.completed", ...base, status: "completed", result: structured, occurredAt: this.clock() });
+      const guardedFailure = this.options.resultGuard?.({ request, result: structured });
+      if (guardedFailure) {
+        this.finish(executionId, { type: "delegation.failed", ...base, status: "failed", failure: guardedFailure, occurredAt: this.clock() });
+        return;
+      }
+      this.finish(executionId, { type: "delegation.completed", ...base, status: "completed", result: structured, delivery: request.delivery, occurredAt: this.clock() });
     } catch (cause) {
       const failure = toFailure(cause);
       const cancelled = failure.code === "EXECUTION_CANCELLED" || failure.code === "EXECUTION_DEADLINE_EXCEEDED";

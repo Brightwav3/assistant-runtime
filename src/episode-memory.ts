@@ -7,7 +7,12 @@ export interface EpisodeMemoryWriterOptions {
   episodes: EpisodeRuntime;
   subjectId: string;
   outputTranscriptMode?: "delta" | "cumulative";
-  /** In diagnostic heard mode, the model reconstruction is the only user-turn source. */
+  /**
+   * In diagnostic heard mode, the voice-to-voice model is authoritative for what the user
+   * meant and for its literal reconstruction. Gemini's provider transcript can be garbage
+   * when the input language is not configured, so it must not replace the heard model's
+   * understanding. The provider transcript remains trace/estimator evidence only.
+   */
   preferHeardInput?: boolean;
   /**
    * Maps a provider session id to the conversation it belongs to. Without it an episode is
@@ -128,6 +133,11 @@ export class EpisodeMemoryWriter {
     }
     if (event.type === "transcript.final" && event.source === "input") {
       if (this.preferHeardInput) {
+        // The voice-to-voice model already understood this audio and records its own
+        // verbatim/meaning through record_heard or intelligence_delegate. In this mode the
+        // provider's text transcript is not canonical user intent: without a configured
+        // language it can turn Czech confirmation into nonsense such as "anomalous".
+        // Keep the event in the raw trace and estimator, but do not overwrite heard input.
         this.trace({ type: "memory.transcript.ignored", sessionId, reason: "heard_model_source_enabled" });
         return;
       }

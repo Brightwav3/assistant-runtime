@@ -19,6 +19,7 @@ const completed = (sessionId = "session-1"): Extract<DelegationEvent, { type: "d
   sessionId,
   interactionId: "interaction-1",
   status: "completed",
+  delivery: { mode: "when_idle", lateResult: "queue" },
   result: RESULT,
   occurredAt: "2026-08-14T12:00:00.000Z",
 });

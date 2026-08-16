@@ -17,6 +17,7 @@ const completed = (executionId = "del-1"): Extract<DelegationEvent, { type: "del
   executionId,
   sessionId: "session-1",
   status: "completed",
+  delivery: { mode: "when_idle", lateResult: "queue" },
   result: { schema: "delegation.result.v1", data: { candidates: [] }, references: [] },
   occurredAt: "2026-08-14T12:00:00.000Z",
 });

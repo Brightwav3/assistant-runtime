@@ -18,6 +18,12 @@ export const INTELLIGENCE_DELEGATE_TOOL = "intelligence_delegate";
 
 export const DELEGATE_LIMITS = Object.freeze({ maxGoalLength: 1_000, maxMemoryIds: 8 } as const);
 
+const normalizeForMemoryIntent = (value: string): string => value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+const memoryWriteGoal = /\b(memory_create|uloz|zapis|zapamatuj|pamatovat|remember|store)\b/u;
+const explicitMemoryTrigger = /\b(zapamatuj(?:te)?(?:\s+si)?|mej(?:te)?\s+na\s+pameti|nezapomen(?:te)?)\b/u;
+const implicitForgottenFactStatement = /\bzapomnel\s+(?:jsem|jsme)\s*,?\s*ze\b/u;
+const memoryTriggerRequiredMessage = "MEMORY_EXPLICIT_TRIGGER_REQUIRED: No memory was saved. The user did not explicitly ask to remember this. Do not say or imply that it was saved; if appropriate, ask for an explicit instruction such as 'Zapamatuj si to.'.";
+
 export interface IntelligenceDelegateOptions {
   broker: DelegationBroker;
   model: DelegationModelSelection;
@@ -78,13 +84,23 @@ export function intelligenceDelegateHandler(options: IntelligenceDelegateOptions
       : options.defaultDelivery.mode;
 
     const correlation = options.correlation();
+    const verbatim = typeof args.current_verbatim === "string" ? args.current_verbatim.trim() : "";
+    const meaning = typeof args.current_meaning === "string" ? args.current_meaning.trim() : "";
     if (options.captureCurrentTurn) {
       const sessionId = correlation.sessionId;
-      const verbatim = typeof args.current_verbatim === "string" ? args.current_verbatim.trim() : "";
-      const meaning = typeof args.current_meaning === "string" ? args.current_meaning.trim() : "";
       const language = typeof args.current_language === "string" ? args.current_language.trim() : "";
       if (!sessionId || !verbatim || !meaning || !language) return { kind: "error", error: { code: "invalid_arguments", message: "The current utterance is required for delegation.", retryable: false } };
       await options.captureCurrentTurn({ heardId: context.requestId, sessionId, verbatim, meaning, language, uncertainParts: parseUncertainParts(typeof args.current_uncertain_parts === "string" ? args.current_uncertain_parts : "[]") });
+    }
+    // Ecosystem ADR 0003 — 0003-delegation-tool-failures-remain-failed.md: refuse an
+    // obvious memory-write delegation before it can produce a misleading acknowledgement.
+    const normalizedGoal = normalizeForMemoryIntent(goal);
+    const normalizedCurrentTurn = normalizeForMemoryIntent(`${verbatim} ${meaning}`);
+    if (
+      !explicitMemoryTrigger.test(normalizedCurrentTurn)
+      && (memoryWriteGoal.test(normalizedGoal) || implicitForgottenFactStatement.test(normalizedCurrentTurn))
+    ) {
+      return { kind: "error", error: { code: "invalid_arguments", message: memoryTriggerRequiredMessage, retryable: false } };
     }
     const selectedContext = await options.selectedContext?.() ?? [];
     const accepted = await options.broker.accept({

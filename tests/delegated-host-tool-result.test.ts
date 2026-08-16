@@ -19,6 +19,7 @@ const completed = (sessionId?: string): Extract<DelegationEvent, { type: "delega
   executionId: "exec-1",
   ...(sessionId ? { sessionId } : {}),
   status: "completed",
+  delivery: { mode: "when_idle", lateResult: "queue" },
   result: { schema: "delegation.result.v1", summary: "hotovo", data: {}, references: [] },
   occurredAt: "2026-08-15T00:00:00.000Z",
 } as never);

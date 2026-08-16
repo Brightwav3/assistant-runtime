@@ -2,11 +2,12 @@
 
 ## Current state
 
-**Session handoff, Milestones 2–7, verified offline on 2026-08-15.** See
-[the plan](../PLAN-session-handoff.md) and
-[the changelog](../CHANGELOG-session-handoff.md) for milestone detail.
+**Session handoff, Milestones 2–7, verified offline on 2026-08-15 and
+qualified on Windows hardware on 2026-08-16.** See
+[the plan](../docs/workstreams/session-handoff/PLAN.md) and
+[the changelog](../docs/workstreams/session-handoff/CHANGELOG.md) for milestone detail.
 
-`npm run verify` passed with 233 tests here, 50 in Realtime Core, 94 in
+`npm run verify` passed with 272 tests here, 50 in Realtime Core, 97 in
 Intelligence Core, 16 in State Core, and 42 in AEC System.
 
 Added under `src/handoff/`: `contracts.ts` (phases, events, logical/physical
@@ -38,24 +39,137 @@ Proven offline across nine test files:
 - handoff status is published to State Core and returns to `idle`;
 - the echo reference is rebound on commit, and never on prepare or abort;
 - `voice`, `delegation` and `compaction` meter as three distinct roles.
+- a delegated result with a failed Tool System call cannot be published as
+  `delegation.completed` or delivered to the voice session.
 
-### Blocked, and what that leaves unverified
+### Live wiring and hardware qualification
 
-**The assembly is not attached to the live realtime path.** `composition.ts`
-binds delegation delivery to the *physical* session id, which is
-indistinguishable from a logical id only while there is one session per
-conversation. Introducing the logical id there changes a path that is verified on
-hardware and cannot be verified from here. `src/handoff/composition.ts` provides
-the whole assembly, so that wiring is one call plus rebinding delivery to
-`logicalSessionId`.
+**The handoff assembly is attached to the live realtime path.** When
+`handoff.enabled` is true and delegation is available, `composition.ts` creates
+the handoff composition for each logical conversation. It feeds the estimator
+from finalized text and measured audio, starts preparation without blocking the
+conversation, and runs the cutover through the realtime adapter. Delegation
+delivery is bound to `logicalSessionId`, so results survive the change from the
+old physical session to its replacement. The feature remains off by default.
 
-These Definition-of-Done items therefore remain **UNVERIFIED**, and all of them
-need hardware:
+The fifth Windows hardware run, together with the operator's direct audio
+observation from that run, promoted the handoff Definition of Done to
+**VERIFIED**:
 
-- a conversation continuing across a handoff with no audible gap;
-- prepare latency and overlap duration measured against a live provider;
-- echo cancellation verified across a real cutover — the rebinding is proven
-  offline; that it is *sufficient* on real hardware is not.
+- a conversation continued across a handoff with no audible gap;
+- live-provider prepare/prefill completed inside the configured readiness
+  window and the replacement continued coherently;
+- echo cancellation remained stable across the physical cutover, with no
+  audible self-interruption reported by the operator.
+
+The audio observations are hardware evidence from the operator, not a claim
+that deterministic tests can measure room acoustics. The separate follow-up is
+the newly clarified wording for a refused implicit memory write; its source
+guard and offline regression pass, but that exact voice response still needs a
+fresh hardware rerun.
+
+### Second live handoff run — 2026-08-16 — LIFECYCLE PASS / OVERALL DEGRADED
+
+The rebuilt manual scenario ran on Windows with Gemini Live
+`gemini-3.1-flash-live-preview`, delegated compaction/recall on
+`gemini-3.5-flash-lite`, and `contextLimitTokens: 800`.
+
+Trace: `.runtime/traces/trace-20260816-144553.jsonl`.
+
+The ADR 0004 lifecycle correction passed on hardware: the logical id stayed
+stable, the physical id changed, no new activation or greeting occurred after
+the commit, and exactly one `memory.episode.closed` was emitted.
+
+The historical trace remains **DEGRADED / NOT VERIFIED** because the pre-fix
+live delegation listener passed its configured `when_idle` default to the
+scheduler instead of the completed delegation's requested `silent` policy.
+Compaction had no session id, so the trace reported
+`delegation.delivery.dropped / NO_SESSION` even though compaction and native
+prefill completed. The fix now carries `delivery` on `delegation.completed`,
+uses it in the live listener, and is covered by a new integration regression;
+the hardware trace must be repeated after rebuilding.
+
+The trace contains no `end_conversation` call; the final close is therefore not
+evidence for confirmed delegated shutdown. Post-handoff qualifier recall,
+no-audible-gap measurement, and AEC across cutover remain unverified.
+
+### Third hardware memory run — 2026-08-16 — SAFE WRITE GUARD / FALSE CLAIM
+
+Trace: `.runtime/traces/trace-20260816-150314.jsonl`.
+
+The explicit-memory guard correctly rejected the non-explicit phrase and did not
+persist a durable memory. The delegated model still claimed success after the
+`memory_create` error. Ecosystem ADR 0003 now carries the parent request id into
+Tool System, correlates failed tool outcomes, and converts the completed-looking
+delegation into `DELEGATION_TOOL_FAILED` before delivery. The new regression is
+covered offline; the negative and positive memory phrases need a hardware rerun.
+
+### Fourth hardware memory run — 2026-08-16 — FALSE-SUCCESS REPAIR PASS
+
+Trace: `.runtime/traces/trace-20260816-151924.jsonl`.
+
+The run had one process, one activation, one greeting, one physical realtime
+session, and one episode close. A failed `memory_create` remained failed as
+`DELEGATION_TOOL_FAILED`; no completed delegation, delivery, or explicit memory
+creation occurred, and MARK did not claim success. This is a hardware PASS for
+the broker-level repair.
+
+The model still attempted the rejected tool once. The follow-up runtime
+preflight recognizes the paraphrased non-explicit sentence and refuses before
+background acceptance. Its regression is included in the 272-test suite, but
+that refinement still needs a hardware rerun. Handoff was not exercised here.
+
+### Fifth hardware run — 2026-08-16 — FULL HANDOFF QUALIFICATION VERIFIED
+
+Trace: `.runtime/traces/trace-20260816-152512.jsonl`.
+
+The run reached prepare, compaction, native prefill, ready, commit, and physical
+session replacement under one stable logical id. No second greeting appeared;
+compaction delivery was sent without `NO_SESSION`; post-handoff recall returned
+the plechovky fact; and delegated `end_conversation` reached
+`runtime.shutdown.honoured` before one episode close.
+
+The provider transcript rendered the final confirmation as `anomalous`, while
+the voice-to-voice model's heard record correctly understood `Ano, máš.`. The
+provider transcript is unreliable because its language detection is wrong; the
+voice-to-voice understanding is authoritative in heard mode. The operator also
+confirmed that the handoff was inaudible and that AEC remained effective across
+the cutover. This completes the handoff hardware qualification. The clarified
+refusal wording remains a separate memory follow-up.
+
+### First live handoff run — 2026-08-16 — DEGRADED / NOT VERIFIED
+
+The manual hardware scenario ran on Windows with Gemini Live
+`gemini-3.1-flash-live-preview`, delegated compaction/recall on
+`gemini-3.5-flash-lite`, and `contextLimitTokens: 800`.
+
+Trace: `.runtime/traces/trace-20260816-143457.jsonl`.
+
+The handoff mechanism itself reached the expected provider sequence:
+
+`handoff.prepared` → `compaction.started` → `compaction.completed` →
+`realtime.prefill.acknowledged` → `handoff.ready` →
+`realtime.session.activated` → `handoff.committed`.
+
+The logical id remained `lsn_b0ddef5d-c689-462c-98ee-ddbde2e66ab2`; the physical
+session changed from `01c4ed36-2d78-4867-87e6-3bb559d2b644` to
+`fad0bab4-7001-41fe-82e6-1f6963ed1571`. `memory.episode.kept_open` was emitted,
+and compaction completed with native context injection.
+
+The full scenario failed immediately after that otherwise successful cutover:
+closing the superseded physical session resolved the runtime's original
+`session.done`, so a later `activation.detected` opened a new logical session
+and spoke the initial greeting again. The run ended with two
+`memory.episode.closed` events. This was a runtime lifecycle defect, not a
+provider greeting from the replacement: `openReplacement()` never sends a
+greeting.
+
+The correction is in `src/adapters.ts`: the public handle now represents the
+logical interaction and spans physical sessions. The regression is covered by
+`tests/handoff-wiring.test.ts`; `npm run verify` passes with 268 tests and a
+clean build. The hardware handoff scenario must be repeated before any
+no-audible-gap, post-handoff recall, delegated `end_conversation`, or AEC
+across-cutover claim is promoted beyond **NOT VERIFIED**.
 
 Milestone 1 (memory import, migration inspection, documented recovery in
 `memory-core`) is **delivered** — see that repository's `PROGRESS.md`. What

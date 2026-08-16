@@ -106,12 +106,14 @@ export interface DelegationEventBase {
   occurredAt: string;
 }
 
+// 0002-delegated-results-are-never-the-user.md — the completed event carries the request's delivery policy to the
+// scheduler; a live consumer must not replace it with a global default.
 export type DelegationEvent =
   | ({ type: "delegation.created" } & DelegationEventBase)
   | ({ type: "delegation.accepted" } & DelegationEventBase)
   | ({ type: "delegation.started" } & DelegationEventBase)
   | ({ type: "delegation.progress"; modelCalls: number; toolCalls: number } & DelegationEventBase)
-  | ({ type: "delegation.completed"; status: "completed"; result: DelegationStructuredResult } & DelegationEventBase)
+  | ({ type: "delegation.completed"; status: "completed"; result: DelegationStructuredResult; delivery: DelegationDeliveryPolicy } & DelegationEventBase)
   | ({ type: "delegation.failed"; status: "failed"; failure: DelegationFailure } & DelegationEventBase)
   | ({ type: "delegation.cancelled"; status: "cancelled"; failure: DelegationFailure } & DelegationEventBase)
   | ({ type: "delegation.delivery.queued"; delivery: DelegationDeliveryPolicy } & DelegationEventBase)

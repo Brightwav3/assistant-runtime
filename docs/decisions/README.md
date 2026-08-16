@@ -31,6 +31,7 @@ naming the ADR.
 - [0001 — Cores do not import each other; the bridge is the only bilingual file](0001-zero-imports-between-cores.md)
 - [0002 — A delegated result enters as runtime context, never as something the user said](0002-delegated-results-are-never-the-user.md)
 - [0003 — The barge-in gate measures echo before it trusts itself](0003-barge-in-thresholds.md)
+- [0004 — A physical realtime session cannot end a logical interaction](0004-logical-interaction-lifecycle.md)
 
 ## See also
 

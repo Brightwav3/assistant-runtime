@@ -76,6 +76,26 @@ test("activation moves every frame at once, and reports itself as a handoff", as
   } finally { await adapter.stop(); }
 });
 
+// ADR 0004-logical-interaction-lifecycle.md — a physical handoff close must not resolve the logical runtime handle.
+test("closing the superseded physical session does not finish the logical interaction", async () => {
+  const { adapter, attachment, primary } = await wired();
+  try {
+    const replacement = await adapter.openReplacement();
+    adapter.activateSession(replacement);
+    await adapter.closeSession(primary);
+    await settle();
+
+    const finishedWhileReplacementActive = await Promise.race([
+      attachment.done.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+    ]);
+    assert.equal(finishedWhileReplacementActive, false, "the old physical session must not end the logical interaction");
+
+    await attachment.close();
+    await attachment.done;
+  } finally { await adapter.stop(); }
+});
+
 test("prefill uses context injection and resolves only once the provider took it", async () => {
   const { provider, adapter } = await wired();
   try {
